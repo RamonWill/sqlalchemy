@@ -1,18 +1,18 @@
+import re
+
 import sqlalchemy as tsa
-from sqlalchemy import column
 from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy import ForeignKey
 from sqlalchemy import func
+from sqlalchemy import inspect
 from sqlalchemy import INT
 from sqlalchemy import Integer
-from sqlalchemy import literal
 from sqlalchemy import MetaData
 from sqlalchemy import pool
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
-from sqlalchemy import TypeDecorator
 from sqlalchemy import VARCHAR
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine.base import Connection
@@ -20,6 +20,7 @@ from sqlalchemy.engine.base import Engine
 from sqlalchemy.engine.mock import MockConnection
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import config
 from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
@@ -27,6 +28,7 @@ from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_instance_of
 from sqlalchemy.testing import is_true
+from sqlalchemy.testing.engines import testing_engine
 from sqlalchemy.testing.mock import Mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
@@ -253,83 +255,6 @@ class HandleInvalidatedOnConnectTest(fixtures.TestBase):
 
         self.dbapi = dbapi
         self.ProgrammingError = sqlite3.ProgrammingError
-
-
-class HandleErrorTest(fixtures.TestBase):
-    __requires__ = ("ad_hoc_engines",)
-    __backend__ = True
-
-    def tearDown(self):
-        Engine.dispatch._clear()
-        Engine._has_events = False
-
-    def test_legacy_dbapi_error(self):
-        engine = engines.testing_engine()
-        canary = Mock()
-
-        with testing.expect_deprecated(
-            r"The ConnectionEvents.dbapi_error\(\) event is deprecated"
-        ):
-            event.listen(engine, "dbapi_error", canary)
-
-        with engine.connect() as conn:
-            try:
-                conn.exec_driver_sql("SELECT FOO FROM I_DONT_EXIST")
-                assert False
-            except tsa.exc.DBAPIError as e:
-                eq_(canary.mock_calls[0][1][5], e.orig)
-                eq_(canary.mock_calls[0][1][2], "SELECT FOO FROM I_DONT_EXIST")
-
-    def test_legacy_dbapi_error_no_ad_hoc_context(self):
-        engine = engines.testing_engine()
-
-        listener = Mock(return_value=None)
-        with testing.expect_deprecated(
-            r"The ConnectionEvents.dbapi_error\(\) event is deprecated"
-        ):
-            event.listen(engine, "dbapi_error", listener)
-
-        nope = SomeException("nope")
-
-        class MyType(TypeDecorator):
-            impl = Integer
-
-            def process_bind_param(self, value, dialect):
-                raise nope
-
-        with engine.connect() as conn:
-            assert_raises_message(
-                tsa.exc.StatementError,
-                r"\(.*SomeException\) " r"nope\n\[SQL\: u?SELECT 1 ",
-                conn.execute,
-                select([1]).where(column("foo") == literal("bar", MyType())),
-            )
-        # no legacy event
-        eq_(listener.mock_calls, [])
-
-    def test_legacy_dbapi_error_non_dbapi_error(self):
-        engine = engines.testing_engine()
-
-        listener = Mock(return_value=None)
-        with testing.expect_deprecated(
-            r"The ConnectionEvents.dbapi_error\(\) event is deprecated"
-        ):
-            event.listen(engine, "dbapi_error", listener)
-
-        nope = TypeError("I'm not a DBAPI error")
-        with engine.connect() as c:
-            c.connection.cursor = Mock(
-                return_value=Mock(execute=Mock(side_effect=nope))
-            )
-
-            assert_raises_message(
-                TypeError,
-                "I'm not a DBAPI error",
-                c.exec_driver_sql,
-                "select ",
-            )
-        # no legacy event
-        eq_(listener.mock_calls, [])
 
 
 def MockDBAPI():  # noqa
@@ -606,6 +531,18 @@ class DeprecatedReflectionTest(fixtures.TablesTest):
             table_names = testing.db.table_names()
         is_true(set(table_names).issuperset(metadata.tables))
 
+    def test_reflecttable(self):
+        inspector = inspect(testing.db)
+        metadata = self.metadata
+        table = Table("user", metadata)
+        with testing.expect_deprecated_20(
+            r"The Inspector.reflecttable\(\) function/method is considered "
+        ):
+            res = inspector.reflecttable(table, None)
+        exp = inspector.reflect_table(table, None)
+
+        eq_(res, exp)
+
 
 class ExecutionOptionsTest(fixtures.TestBase):
     def test_branched_connection_execution_options(self):
@@ -835,3 +772,89 @@ class RawExecuteTest(fixtures.TablesTest):
                 (3, "horse"),
                 (4, "sally"),
             ]
+
+
+class EngineEventsTest(fixtures.TestBase):
+    __requires__ = ("ad_hoc_engines",)
+    __backend__ = True
+
+    def tearDown(self):
+        Engine.dispatch._clear()
+        Engine._has_events = False
+
+    def _assert_stmts(self, expected, received):
+        list(received)
+        for stmt, params, posn in expected:
+            if not received:
+                assert False, "Nothing available for stmt: %s" % stmt
+            while received:
+                teststmt, testparams, testmultiparams = received.pop(0)
+                teststmt = (
+                    re.compile(r"[\n\t ]+", re.M).sub(" ", teststmt).strip()
+                )
+                if teststmt.startswith(stmt) and (
+                    testparams == params or testparams == posn
+                ):
+                    break
+
+    def test_retval_flag(self):
+        canary = []
+
+        def tracker(name):
+            def go(conn, *args, **kw):
+                canary.append(name)
+
+            return go
+
+        def execute(conn, clauseelement, multiparams, params):
+            canary.append("execute")
+            return clauseelement, multiparams, params
+
+        def cursor_execute(
+            conn, cursor, statement, parameters, context, executemany
+        ):
+            canary.append("cursor_execute")
+            return statement, parameters
+
+        engine = engines.testing_engine()
+
+        assert_raises(
+            tsa.exc.ArgumentError,
+            event.listen,
+            engine,
+            "begin",
+            tracker("begin"),
+            retval=True,
+        )
+
+        event.listen(engine, "before_execute", execute, retval=True)
+        event.listen(
+            engine, "before_cursor_execute", cursor_execute, retval=True
+        )
+        with testing.expect_deprecated(
+            r"The argument signature for the "
+            r"\"ConnectionEvents.before_execute\" event listener",
+        ):
+            engine.execute(select([1]))
+        eq_(canary, ["execute", "cursor_execute"])
+
+    def test_argument_format_execute(self):
+        def before_execute(conn, clauseelement, multiparams, params):
+            assert isinstance(multiparams, (list, tuple))
+            assert isinstance(params, dict)
+
+        def after_execute(conn, clauseelement, multiparams, params, result):
+            assert isinstance(multiparams, (list, tuple))
+            assert isinstance(params, dict)
+
+        e1 = testing_engine(config.db_url)
+        event.listen(e1, "before_execute", before_execute)
+        event.listen(e1, "after_execute", after_execute)
+
+        with testing.expect_deprecated(
+            r"The argument signature for the "
+            r"\"ConnectionEvents.before_execute\" event listener",
+            r"The argument signature for the "
+            r"\"ConnectionEvents.after_execute\" event listener",
+        ):
+            e1.execute(select([1]))

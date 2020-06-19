@@ -14,6 +14,7 @@ from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import Unicode
 from sqlalchemy import util
+from sqlalchemy.future import select as future_select
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import clear_mappers
 from sqlalchemy.orm import configure_mappers
@@ -112,73 +113,101 @@ def profile_memory(
             max_grew_for = 0
             success = False
             until_maxtimes = 0
-            while True:
-                if until_maxtimes >= maxtimes // 5:
-                    break
-                for x in range(5):
-                    try:
-                        func(*func_args)
-                    except Exception as err:
+            try:
+                while True:
+                    if until_maxtimes >= maxtimes // 5:
+                        break
+                    for x in range(5):
+                        try:
+                            func(*func_args)
+                        except Exception as err:
+                            queue.put(
+                                (
+                                    "result",
+                                    False,
+                                    "Test raised an exception: %r" % err,
+                                )
+                            )
+
+                            raise
+
+                        gc_collect()
+
+                        samples.append(
+                            get_num_objects()
+                            if get_num_objects is not None
+                            else len(get_objects_skipping_sqlite_issue())
+                        )
+
+                    if assert_no_sessions:
+                        assert len(_sessions) == 0, "%d sessions remain" % (
+                            len(_sessions),
+                        )
+
+                    # queue.put(('samples', samples))
+
+                    latest_max = max(samples[-5:])
+                    if latest_max > max_:
                         queue.put(
                             (
-                                "result",
-                                False,
-                                "Test raised an exception: %r" % err,
+                                "status",
+                                "Max grew from %s to %s, max has "
+                                "grown for %s samples"
+                                % (max_, latest_max, max_grew_for),
                             )
                         )
-
-                        raise
-                    gc_collect()
-                    samples.append(
-                        get_num_objects()
-                        if get_num_objects is not None
-                        else len(get_objects_skipping_sqlite_issue())
-                    )
-
-                if assert_no_sessions:
-                    assert len(_sessions) == 0
-
-                # queue.put(('samples', samples))
-
-                latest_max = max(samples[-5:])
-                if latest_max > max_:
-                    queue.put(
-                        (
-                            "status",
-                            "Max grew from %s to %s, max has "
-                            "grown for %s samples"
-                            % (max_, latest_max, max_grew_for),
+                        max_ = latest_max
+                        max_grew_for += 1
+                        until_maxtimes += 1
+                        continue
+                    else:
+                        queue.put(
+                            (
+                                "status",
+                                "Max remained at %s, %s more attempts left"
+                                % (max_, max_grew_for),
+                            )
                         )
-                    )
-                    max_ = latest_max
-                    max_grew_for += 1
-                    until_maxtimes += 1
-                    continue
-                else:
-                    queue.put(
-                        (
-                            "status",
-                            "Max remained at %s, %s more attempts left"
-                            % (max_, max_grew_for),
-                        )
-                    )
-                    max_grew_for -= 1
-                    if max_grew_for == 0:
-                        success = True
-                        break
-
-            if not success:
-                queue.put(
-                    (
-                        "result",
-                        False,
-                        "Ran for a total of %d times, memory kept "
-                        "growing: %r" % (maxtimes, samples),
-                    )
-                )
-
+                        max_grew_for -= 1
+                        if max_grew_for == 0:
+                            success = True
+                            break
+            except Exception as err:
+                queue.put(("result", False, "got exception: %s" % err))
             else:
-                queue.put(("result", True, "success"))
+                if not success:
+                    queue.put(
+                        (
+                            "result",
+                            False,
+                            "Ran for a total of %d times, memory kept "
+                            "growing: %r" % (maxtimes, samples),
+                        )
+                    )
+
+                else:
+                    queue.put(("result", True, "success"))
+
+        def run_plain(*func_args):
+            import queue as _queue
+
+            q = _queue.Queue()
+            profile(q, func_args)
+
+            while True:
+                row = q.get()
+                typ = row[0]
+                if typ == "samples":
+                    print("sample gc sizes:", row[1])
+                elif typ == "status":
+                    print(row[1])
+                elif typ == "result":
+                    break
+                else:
+                    assert False, "can't parse row"
+            assert row[1], row[2]
+
+        # return run_plain
 
         def run_in_process(*func_args):
             queue = multiprocessing.Queue()
@@ -215,7 +244,15 @@ class EnsureZeroed(fixtures.ORMTest):
     def setup(self):
         _sessions.clear()
         _mapper_registry.clear()
-        self.engine = engines.testing_engine(options={"use_reaper": False})
+
+        # enable query caching, however make the cache small so that
+        # the tests don't take too long.  issues w/ caching include making
+        # sure sessions don't get stuck inside of it.  However it will
+        # make tests like test_mapper_reset take a long time because mappers
+        # are very much a part of what's in the cache.
+        self.engine = engines.testing_engine(
+            options={"use_reaper": False, "query_cache_size": 10}
+        )
 
 
 class MemUsageTest(EnsureZeroed):
@@ -765,6 +802,7 @@ class MemUsageWBackendTest(EnsureZeroed):
             sess = Session()
             sess.query(B).options(subqueryload(B.as_.of_type(ASub))).all()
             sess.close()
+            del sess
 
         try:
             go()
@@ -942,7 +980,9 @@ class MemUsageWBackendTest(EnsureZeroed):
                 sess.delete(a)
             sess.flush()
 
-            # don't need to clear_mappers()
+            # mappers necessarily find themselves in the compiled cache,
+            # so to allow them to be GC'ed clear out the cache
+            self.engine.clear_compiled_cache()
             del B
             del A
 
@@ -1124,6 +1164,52 @@ class CycleTest(_fixtures.FixtureTest):
 
         go()
 
+    def test_session_execute_orm(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        s = Session()
+
+        @assert_cycles()
+        def go():
+            stmt = future_select(User)
+            s.execute(stmt)
+
+        go()
+
+    def test_cache_key(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        @assert_cycles()
+        def go():
+            stmt = future_select(User)
+            stmt._generate_cache_key()
+
+        go()
+
+    def test_proxied_attribute(self):
+        from sqlalchemy.ext import hybrid
+
+        users = self.tables.users
+
+        class Foo(object):
+            @hybrid.hybrid_property
+            def user_name(self):
+                return self.name
+
+        mapper(Foo, users)
+
+        # unfortunately there's a lot of cycles with an aliased()
+        # for now, however calling upon clause_element does not seem
+        # to make it worse which is what this was looking to test
+        @assert_cycles(68)
+        def go():
+            a1 = aliased(Foo)
+            a1.user_name.__clause_element__()
+
+        go()
+
     def test_raise_from(self):
         @assert_cycles()
         def go():
@@ -1293,8 +1379,10 @@ class CycleTest(_fixtures.FixtureTest):
             s.query(User).options(joinedload(User.addresses)).all()
 
         # cycles here are due to ClauseElement._cloned_set and Load.context,
-        # others as of cache key
-        @assert_cycles(29)
+        # others as of cache key.  The orm.instances() function now calls
+        # dispose() on both the context and the compiled state to try
+        # to reduce these cycles.
+        @assert_cycles(18)
         def go():
             generate()
 
@@ -1317,7 +1405,7 @@ class CycleTest(_fixtures.FixtureTest):
         @assert_cycles(7)
         def go():
             s = select([users]).select_from(users.join(addresses))
-            state = s._compile_state_factory(s, None)
+            state = s._compile_state_factory(s, s.compile())
             state.froms
 
         go()
@@ -1355,7 +1443,7 @@ class CycleTest(_fixtures.FixtureTest):
 
         go()
 
-    def test_core_select(self):
+    def test_result_fetchone(self):
         User, Address = self.classes("User", "Address")
         configure_mappers()
 
@@ -1363,7 +1451,75 @@ class CycleTest(_fixtures.FixtureTest):
 
         stmt = s.query(User).join(User.addresses).statement
 
-        @assert_cycles()
+        @assert_cycles(4)
+        def go():
+            result = s.connection(mapper=User).execute(stmt)
+            while True:
+                row = result.fetchone()
+                if row is None:
+                    break
+
+        go()
+
+    def test_result_fetchall(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        s = Session()
+
+        stmt = s.query(User).join(User.addresses).statement
+
+        @assert_cycles(4)
+        def go():
+            result = s.execute(stmt)
+            rows = result.fetchall()  # noqa
+
+        go()
+
+    def test_result_fetchmany(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        s = Session()
+
+        stmt = s.query(User).join(User.addresses).statement
+
+        @assert_cycles(4)
+        def go():
+            result = s.execute(stmt)
+            for partition in result.partitions(3):
+                pass
+
+        go()
+
+    def test_result_fetchmany_unique(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        s = Session()
+
+        stmt = s.query(User).join(User.addresses).statement
+
+        @assert_cycles(4)
+        def go():
+            result = s.execute(stmt)
+            for partition in result.unique().partitions(3):
+                pass
+
+        go()
+
+    def test_core_select_from_orm_query(self):
+        User, Address = self.classes("User", "Address")
+        configure_mappers()
+
+        s = Session()
+
+        stmt = s.query(User).join(User.addresses).statement
+
+        # ORM query using future select for .statement is adding
+        # some ORMJoin cycles here during compilation.  not worth trying to
+        # find it
+        @assert_cycles(4)
         def go():
             s.execute(stmt)
 

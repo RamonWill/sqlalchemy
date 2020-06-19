@@ -12,6 +12,7 @@ from ..schema import Column
 from ..schema import Table
 from ... import bindparam
 from ... import case
+from ... import column
 from ... import Computed
 from ... import false
 from ... import func
@@ -20,6 +21,7 @@ from ... import literal_column
 from ... import null
 from ... import select
 from ... import String
+from ... import table
 from ... import testing
 from ... import text
 from ... import true
@@ -41,8 +43,8 @@ class CollateTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "data": "collate data1"},
@@ -51,7 +53,8 @@ class CollateTest(fixtures.TablesTest):
         )
 
     def _assert_result(self, select, result):
-        eq_(config.db.execute(select).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select).fetchall(), result)
 
     @testing.requires.order_by_collation
     def test_collate_order_by(self):
@@ -89,8 +92,8 @@ class OrderByLabelTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "x": 1, "y": 2, "q": "q1", "p": "p3"},
@@ -100,7 +103,8 @@ class OrderByLabelTest(fixtures.TablesTest):
         )
 
     def _assert_result(self, select, result):
-        eq_(config.db.execute(select).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select).fetchall(), result)
 
     def test_plain(self):
         table = self.tables.some_table
@@ -161,8 +165,8 @@ class LimitOffsetTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "x": 1, "y": 2},
@@ -173,7 +177,8 @@ class LimitOffsetTest(fixtures.TablesTest):
         )
 
     def _assert_result(self, select, result, params=()):
-        eq_(config.db.execute(select, params).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select, params).fetchall(), result)
 
     def _assert_result_str(self, select, result, params=()):
         conn = config.db.connect(close_with_result=True)
@@ -303,7 +308,8 @@ class JoinTest(fixtures.TablesTest):
     __backend__ = True
 
     def _assert_result(self, select, result, params=()):
-        eq_(config.db.execute(select, params).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select, params).fetchall(), result)
 
     @classmethod
     def define_tables(cls, metadata):
@@ -316,13 +322,13 @@ class JoinTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.a.insert(),
             [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}],
         )
 
-        config.db.execute(
+        connection.execute(
             cls.tables.b.insert(),
             [
                 {"id": 1, "a_id": 1},
@@ -412,8 +418,8 @@ class CompoundSelectTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "x": 1, "y": 2},
@@ -424,7 +430,8 @@ class CompoundSelectTest(fixtures.TablesTest):
         )
 
     def _assert_result(self, select, result, params=()):
-        eq_(config.db.execute(select, params).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select, params).fetchall(), result)
 
     def test_plain_union(self):
         table = self.tables.some_table
@@ -555,8 +562,8 @@ class PostCompileParamsTest(
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "x": 1, "y": 2, "z": "z1"},
@@ -672,8 +679,8 @@ class ExpandingBoundInTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "x": 1, "y": 2, "z": "z1"},
@@ -684,7 +691,8 @@ class ExpandingBoundInTest(fixtures.TablesTest):
         )
 
     def _assert_result(self, select, result, params=()):
-        eq_(config.db.execute(select, params).fetchall(), result)
+        with config.db.connect() as conn:
+            eq_(conn.execute(select, params).fetchall(), result)
 
     def test_multiple_empty_sets(self):
         # test that any anonymous aliasing used by the dialect
@@ -837,7 +845,7 @@ class ExpandingBoundInTest(fixtures.TablesTest):
 
         self._assert_result(stmt, [(1,), (2,), (3,), (4,)], params={"q": []})
 
-    def test_null_in_empty_set_is_false(self):
+    def test_null_in_empty_set_is_false(self, connection):
         stmt = select(
             [
                 case(
@@ -853,7 +861,7 @@ class ExpandingBoundInTest(fixtures.TablesTest):
                 )
             ]
         )
-        in_(config.db.execute(stmt).fetchone()[0], (False, 0))
+        in_(connection.execute(stmt).fetchone()[0], (False, 0))
 
 
 class LikeFunctionsTest(fixtures.TablesTest):
@@ -872,8 +880,8 @@ class LikeFunctionsTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        config.db.execute(
+    def insert_data(cls, connection):
+        connection.execute(
             cls.tables.some_table.insert(),
             [
                 {"id": 1, "data": "abcdefg"},
@@ -983,12 +991,11 @@ class ComputedColumnTest(fixtures.TablesTest):
         )
 
     @classmethod
-    def insert_data(cls):
-        with config.db.begin() as conn:
-            conn.execute(
-                cls.tables.square.insert(),
-                [{"id": 1, "side": 10}, {"id": 10, "side": 42}],
-            )
+    def insert_data(cls, connection):
+        connection.execute(
+            cls.tables.square.insert(),
+            [{"id": 1, "side": 10}, {"id": 10, "side": 42}],
+        )
 
     def test_select_all(self):
         with config.db.connect() as conn:
@@ -1009,3 +1016,67 @@ class ComputedColumnTest(fixtures.TablesTest):
                 .order_by(self.tables.square.c.id)
             ).fetchall()
             eq_(res, [(100, 40), (1764, 168)])
+
+
+class DistinctOnTest(AssertsCompiledSQL, fixtures.TablesTest):
+    __backend__ = True
+    __requires__ = ("standard_cursor_sql",)
+
+    @testing.fails_if(testing.requires.supports_distinct_on)
+    def test_distinct_on(self):
+        stm = select(["*"]).distinct(column("q")).select_from(table("foo"))
+        with testing.expect_deprecated(
+            "DISTINCT ON is currently supported only by the PostgreSQL "
+        ):
+            self.assert_compile(stm, "SELECT DISTINCT * FROM foo")
+
+
+class IsOrIsNotDistinctFromTest(fixtures.TablesTest):
+    __backend__ = True
+    __requires__ = ("supports_is_distinct_from",)
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "is_distinct_test",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("col_a", Integer, nullable=True),
+            Column("col_b", Integer, nullable=True),
+        )
+
+    @testing.combinations(
+        ("both_int_different", 0, 1, 1),
+        ("both_int_same", 1, 1, 0),
+        ("one_null_first", None, 1, 1),
+        ("one_null_second", 0, None, 1),
+        ("both_null", None, None, 0),
+        id_="iaaa",
+        argnames="col_a_value, col_b_value, expected_row_count_for_is",
+    )
+    def test_is_or_isnot_distinct_from(
+        self, col_a_value, col_b_value, expected_row_count_for_is, connection
+    ):
+        tbl = self.tables.is_distinct_test
+
+        connection.execute(
+            tbl.insert(),
+            [{"id": 1, "col_a": col_a_value, "col_b": col_b_value}],
+        )
+
+        result = connection.execute(
+            tbl.select(tbl.c.col_a.is_distinct_from(tbl.c.col_b))
+        ).fetchall()
+        eq_(
+            len(result), expected_row_count_for_is,
+        )
+
+        expected_row_count_for_isnot = (
+            1 if expected_row_count_for_is == 0 else 0
+        )
+        result = connection.execute(
+            tbl.select(tbl.c.col_a.isnot_distinct_from(tbl.c.col_b))
+        ).fetchall()
+        eq_(
+            len(result), expected_row_count_for_isnot,
+        )

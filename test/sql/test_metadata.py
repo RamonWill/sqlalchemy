@@ -9,6 +9,7 @@ from sqlalchemy import Boolean
 from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import ColumnDefault
+from sqlalchemy import desc
 from sqlalchemy import Enum
 from sqlalchemy import event
 from sqlalchemy import exc
@@ -32,6 +33,7 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.engine import default
 from sqlalchemy.schema import AddConstraint
 from sqlalchemy.schema import CreateIndex
+from sqlalchemy.schema import DefaultClause
 from sqlalchemy.schema import DropIndex
 from sqlalchemy.sql import naming
 from sqlalchemy.sql import operators
@@ -176,6 +178,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         eq_(len(metadata.tables), 0)
 
     def test_metadata_tables_immutable(self):
+        # this use case was added due to #1917.
         metadata = MetaData()
 
         Table("t1", metadata, Column("x", Integer))
@@ -609,6 +612,93 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         a.add_is_dependent_on(b)
         eq_(meta.sorted_tables, [b, c, d, a, e])
 
+    def test_fks_deterministic_order(self):
+        meta = MetaData()
+        a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        b = Table("b", meta, Column("foo", Integer))
+        c = Table("c", meta, Column("foo", Integer))
+        d = Table("d", meta, Column("foo", Integer))
+        e = Table("e", meta, Column("foo", Integer, ForeignKey("c.foo")))
+
+        eq_(meta.sorted_tables, [b, c, d, a, e])
+
+    def test_cycles_fks_warning_one(self):
+        meta = MetaData()
+        a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        b = Table("b", meta, Column("foo", Integer, ForeignKey("d.foo")))
+        c = Table("c", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        d = Table("d", meta, Column("foo", Integer, ForeignKey("c.foo")))
+        e = Table("e", meta, Column("foo", Integer))
+
+        with testing.expect_warnings(
+            "Cannot correctly sort tables; there are unresolvable cycles "
+            'between tables "b, c, d", which is usually caused by mutually '
+            "dependent foreign key constraints.  "
+            "Foreign key constraints involving these tables will not be "
+            "considered"
+        ):
+            eq_(meta.sorted_tables, [b, c, d, e, a])
+
+    def test_cycles_fks_warning_two(self):
+        meta = MetaData()
+        a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        b = Table("b", meta, Column("foo", Integer, ForeignKey("a.foo")))
+        c = Table("c", meta, Column("foo", Integer, ForeignKey("e.foo")))
+        d = Table("d", meta, Column("foo", Integer))
+        e = Table("e", meta, Column("foo", Integer, ForeignKey("d.foo")))
+
+        with testing.expect_warnings(
+            "Cannot correctly sort tables; there are unresolvable cycles "
+            'between tables "a, b", which is usually caused by mutually '
+            "dependent foreign key constraints.  "
+            "Foreign key constraints involving these tables will not be "
+            "considered"
+        ):
+            eq_(meta.sorted_tables, [a, b, d, e, c])
+
+    def test_cycles_fks_fks_delivered_separately(self):
+        meta = MetaData()
+        a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        b = Table("b", meta, Column("foo", Integer, ForeignKey("a.foo")))
+        c = Table("c", meta, Column("foo", Integer, ForeignKey("e.foo")))
+        d = Table("d", meta, Column("foo", Integer))
+        e = Table("e", meta, Column("foo", Integer, ForeignKey("d.foo")))
+
+        results = schema.sort_tables_and_constraints(
+            sorted(meta.tables.values(), key=lambda t: t.key)
+        )
+        results[-1] = (None, set(results[-1][-1]))
+        eq_(
+            results,
+            [
+                (a, set()),
+                (b, set()),
+                (d, {fk.constraint for fk in d.foreign_keys}),
+                (e, {fk.constraint for fk in e.foreign_keys}),
+                (c, {fk.constraint for fk in c.foreign_keys}),
+                (
+                    None,
+                    {fk.constraint for fk in a.foreign_keys}.union(
+                        fk.constraint for fk in b.foreign_keys
+                    ),
+                ),
+            ],
+        )
+
+    def test_cycles_fks_usealter(self):
+        meta = MetaData()
+        a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        b = Table(
+            "b",
+            meta,
+            Column("foo", Integer, ForeignKey("d.foo", use_alter=True)),
+        )
+        c = Table("c", meta, Column("foo", Integer, ForeignKey("b.foo")))
+        d = Table("d", meta, Column("foo", Integer, ForeignKey("c.foo")))
+        e = Table("e", meta, Column("foo", Integer))
+
+        eq_(meta.sorted_tables, [b, e, a, c, d])
+
     def test_nonexistent(self):
         assert_raises(
             tsa.exc.NoSuchTableError,
@@ -627,6 +717,22 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
             (Sequence("my_seq"), "Sequence('my_seq')"),
             (Sequence("my_seq", start=5), "Sequence('my_seq', start=5)"),
             (Column("foo", Integer), "Column('foo', Integer(), table=None)"),
+            (
+                Column(
+                    "foo",
+                    Integer,
+                    primary_key=True,
+                    nullable=False,
+                    onupdate=1,
+                    default=42,
+                    server_default="42",
+                    comment="foo",
+                ),
+                "Column('foo', Integer(), table=None, primary_key=True, "
+                "nullable=False, onupdate=%s, default=%s, server_default=%s, "
+                "comment='foo')"
+                % (ColumnDefault(1), ColumnDefault(42), DefaultClause("42"),),
+            ),
             (
                 Table("bar", MetaData(), Column("x", String)),
                 "Table('bar', MetaData(bind=None), "
@@ -653,7 +759,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
 class ToMetaDataTest(fixtures.TestBase, ComparesTables):
     @testing.requires.check_constraints
     def test_copy(self):
-        # TODO: modernize this test
+        # TODO: modernize this test for 2.0
 
         from sqlalchemy.testing.schema import Table
 
@@ -2152,7 +2258,7 @@ class SchemaTypeTest(fixtures.TestBase):
     def test_boolean_constraint_type_doesnt_double(self):
         m1 = MetaData()
 
-        t1 = Table("x", m1, Column("flag", Boolean()))
+        t1 = Table("x", m1, Column("flag", Boolean(create_constraint=True)))
         eq_(
             len([c for c in t1.constraints if isinstance(c, CheckConstraint)]),
             1,
@@ -2168,7 +2274,11 @@ class SchemaTypeTest(fixtures.TestBase):
     def test_enum_constraint_type_doesnt_double(self):
         m1 = MetaData()
 
-        t1 = Table("x", m1, Column("flag", Enum("a", "b", "c")))
+        t1 = Table(
+            "x",
+            m1,
+            Column("flag", Enum("a", "b", "c", create_constraint=True)),
+        )
         eq_(
             len([c for c in t1.constraints if isinstance(c, CheckConstraint)]),
             1,
@@ -2617,6 +2727,23 @@ class ConstraintTest(fixtures.TestBase):
             t.append_constraint,
             idx,
         )
+
+    def test_non_attached_col_plus_string_expr(self):
+        # another one that declarative can lead towards
+        metadata = MetaData()
+
+        t1 = Table("a", metadata, Column("id", Integer))
+
+        c2 = Column("x", Integer)
+
+        # if we do it here, no problem
+        # t1.append_column(c2)
+
+        idx = Index("foo", c2, desc("foo"))
+
+        t1.append_column(c2)
+
+        self._assert_index_col_x(t1, idx, columns=True)
 
     def test_column_associated_w_lowercase_table(self):
         from sqlalchemy import table
@@ -4908,7 +5035,11 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
             naming_convention={"ck": "ck_%(table_name)s_%(constraint_name)s"}
         )
 
-        u1 = Table("user", m1, Column("x", Boolean(name="foo")))
+        u1 = Table(
+            "user",
+            m1,
+            Column("x", Boolean(name="foo", create_constraint=True)),
+        )
         # constraint is not hit
         eq_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][
@@ -4930,7 +5061,7 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
             naming_convention={"ck": "ck_%(table_name)s_%(column_0_name)s"}
         )
 
-        u1 = Table("user", m1, Column("x", Boolean()))
+        u1 = Table("user", m1, Column("x", Boolean(create_constraint=True)))
         # constraint is not hit
         is_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][
@@ -4952,7 +5083,11 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
             naming_convention={"ck": "ck_%(table_name)s_%(constraint_name)s"}
         )
 
-        u1 = Table("user", m1, Column("x", Enum("a", "b", name="foo")))
+        u1 = Table(
+            "user",
+            m1,
+            Column("x", Enum("a", "b", name="foo", create_constraint=True)),
+        )
         eq_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][
                 0
@@ -4974,7 +5109,14 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
         u1 = Table(
-            "user", m1, Column("x", Enum("a", "b", name=naming.conv("foo")))
+            "user",
+            m1,
+            Column(
+                "x",
+                Enum(
+                    "a", "b", name=naming.conv("foo"), create_constraint=True
+                ),
+            ),
         )
         eq_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][
@@ -4996,7 +5138,7 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
             naming_convention={"ck": "ck_%(table_name)s_%(constraint_name)s"}
         )
 
-        u1 = Table("user", m1, Column("x", Boolean()))
+        u1 = Table("user", m1, Column("x", Boolean(create_constraint=True)))
         # constraint gets special _defer_none_name
         is_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][
@@ -5022,7 +5164,7 @@ class NamingConventionTest(fixtures.TestBase, AssertsCompiledSQL):
     def test_schematype_no_ck_name_boolean_no_name(self):
         m1 = MetaData()  # no naming convention
 
-        u1 = Table("user", m1, Column("x", Boolean()))
+        u1 = Table("user", m1, Column("x", Boolean(create_constraint=True)))
         # constraint gets special _defer_none_name
         is_(
             [c for c in u1.constraints if isinstance(c, CheckConstraint)][

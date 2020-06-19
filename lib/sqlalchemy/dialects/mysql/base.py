@@ -29,7 +29,7 @@ Connection Timeouts and Disconnects
 MySQL features an automatic connection close behavior, for connections that
 have been idle for a fixed period of time, defaulting to eight hours.
 To circumvent having this issue, use
-the :paramref:`.create_engine.pool_recycle` option which ensures that
+the :paramref:`_sa.create_engine.pool_recycle` option which ensures that
 a connection will be discarded and replaced with a new one if it has been
 present in the pool for a fixed number of seconds::
 
@@ -79,7 +79,8 @@ to ``MyISAM`` for this value, although newer versions may be defaulting
 to ``InnoDB``.  The ``InnoDB`` engine is typically preferred for its support
 of transactions and foreign keys.
 
-A :class:`.Table` that is created in a MySQL database with a storage engine
+A :class:`_schema.Table`
+that is created in a MySQL database with a storage engine
 of ``MyISAM`` will be essentially non-transactional, meaning any
 INSERT/UPDATE/DELETE statement referring to this table will be invoked as
 autocommit.   It also will have no support for foreign key constraints; while
@@ -119,15 +120,17 @@ Transaction Isolation Level
 ---------------------------
 
 All MySQL dialects support setting of transaction isolation level both via a
-dialect-specific parameter :paramref:`.create_engine.isolation_level` accepted
-by :func:`.create_engine`, as well as the
+dialect-specific parameter :paramref:`_sa.create_engine.isolation_level`
+accepted
+by :func:`_sa.create_engine`, as well as the
 :paramref:`.Connection.execution_options.isolation_level` argument as passed to
-:meth:`.Connection.execution_options`. This feature works by issuing the
+:meth:`_engine.Connection.execution_options`.
+This feature works by issuing the
 command ``SET SESSION TRANSACTION ISOLATION LEVEL <level>`` for each new
 connection.  For the special AUTOCOMMIT isolation level, DBAPI-specific
 techniques are used.
 
-To set isolation level using :func:`.create_engine`::
+To set isolation level using :func:`_sa.create_engine`::
 
     engine = create_engine(
                     "mysql://scott:tiger@localhost/test",
@@ -174,7 +177,8 @@ foreign key::
   )
 
 You can disable this behavior by passing ``False`` to the
-:paramref:`~.Column.autoincrement` argument of :class:`.Column`.  This flag
+:paramref:`_schema.Column.autoincrement` argument of :class:`_schema.Column`.
+This flag
 can also be used to enable auto-increment on a secondary column in a
 multi-column key for some storage engines::
 
@@ -195,7 +199,7 @@ will receive results.  The most typical way of invoking this feature is via the
 :paramref:`.Connection.execution_options.stream_results` connection execution
 option.   Server side cursors can also be enabled for all SELECT statements
 unconditionally by passing ``server_side_cursors=True`` to
-:func:`.create_engine`.
+:func:`_sa.create_engine`.
 
 .. versionadded:: 1.1.4 - added server-side cursor support.
 
@@ -301,7 +305,8 @@ MySQL features two varieties of identifier "quoting style", one using
 backticks and the other using quotes, e.g. ```some_identifier```  vs.
 ``"some_identifier"``.   All MySQL dialects detect which version
 is in use by checking the value of ``sql_mode`` when a connection is first
-established with a particular :class:`.Engine`.  This quoting style comes
+established with a particular :class:`_engine.Engine`.
+This quoting style comes
 into play when rendering table and column names as well as when reflecting
 existing database structures.  The detection is entirely automatic and
 no special configuration is needed to use either quoting style.
@@ -323,7 +328,8 @@ available.
 * INSERT..ON DUPLICATE KEY UPDATE:  See
   :ref:`mysql_insert_on_duplicate_key_update`
 
-* SELECT pragma, use :meth:`.Select.prefix_with` and :meth:`.Query.prefix_with`::
+* SELECT pragma, use :meth:`_expression.Select.prefix_with` and
+  :meth:`_query.Query.prefix_with`::
 
     select(...).prefix_with(['HIGH_PRIORITY', 'SQL_SMALL_RESULT'])
 
@@ -331,11 +337,13 @@ available.
 
     update(..., mysql_limit=10)
 
-* optimizer hints, use :meth:`.Select.prefix_with` and :meth:`.Query.prefix_with`::
+* optimizer hints, use :meth:`_expression.Select.prefix_with` and
+  :meth:`_query.Query.prefix_with`::
 
     select(...).prefix_with("/*+ NO_RANGE_OPTIMIZATION(t4 PRIMARY) */")
 
-* index hints, use :meth:`.Select.with_hint` and :meth:`.Query.with_hint`::
+* index hints, use :meth:`_expression.Select.with_hint` and
+  :meth:`_query.Query.with_hint`::
 
     select(...).with_hint(some_table, "USE INDEX xyz")
 
@@ -379,7 +387,8 @@ from the proposed insertion.   These values are normally specified using
 keyword arguments passed to the
 :meth:`~.mysql.Insert.on_duplicate_key_update`
 given column key values (usually the name of the column, unless it
-specifies :paramref:`.Column.key`) as keys and literal or SQL expressions
+specifies :paramref:`_schema.Column.key`
+) as keys and literal or SQL expressions
 as values::
 
     on_duplicate_key_stmt = insert_stmt.on_duplicate_key_update(
@@ -396,7 +405,8 @@ forms are accepted, including a single dictionary::
 
 as well as a list of 2-tuples, which will automatically provide
 a parameter-ordered UPDATE statement in a manner similar to that described
-at :ref:`updates_order_parameters`.  Unlike the :class:`.Update` object,
+at :ref:`updates_order_parameters`.  Unlike the :class:`_expression.Update`
+object,
 no special flag is needed to specify the intent since the argument form is
 this context is unambiguous::
 
@@ -412,9 +422,10 @@ this context is unambiguous::
 
 .. warning::
 
-    The :meth:`.Insert.on_duplicate_key_update` method does **not** take into
+    The :meth:`_expression.Insert.on_duplicate_key_update`
+    method does **not** take into
     account Python-side default UPDATE values or generation functions, e.g.
-    e.g. those specified using :paramref:`.Column.onupdate`.
+    e.g. those specified using :paramref:`_schema.Column.onupdate`.
     These values will not be exercised for an ON DUPLICATE KEY style of UPDATE,
     unless they are manually specified explicitly in the parameters.
 
@@ -423,7 +434,7 @@ this context is unambiguous::
 In order to refer to the proposed insertion row, the special alias
 :attr:`~.mysql.Insert.inserted` is available as an attribute on
 the :class:`.mysql.Insert` object; this object is a
-:class:`.ColumnCollection` which contains all columns of the target
+:class:`_expression.ColumnCollection` which contains all columns of the target
 table::
 
     from sqlalchemy.dialects.mysql import insert
@@ -458,7 +469,7 @@ This setting is currently hardcoded.
 
 .. seealso::
 
-    :attr:`.ResultProxy.rowcount`
+    :attr:`_engine.CursorResult.rowcount`
 
 
 CAST Support
@@ -586,7 +597,8 @@ Foreign Key Arguments to Avoid
 
 MySQL does not support the foreign key arguments "DEFERRABLE", "INITIALLY",
 or "MATCH".  Using the ``deferrable`` or ``initially`` keyword argument with
-:class:`.ForeignKeyConstraint` or :class:`.ForeignKey` will have the effect of
+:class:`_schema.ForeignKeyConstraint` or :class:`_schema.ForeignKey`
+will have the effect of
 these keywords being rendered in a DDL expression, which will then raise an
 error on MySQL.  In order to use these keywords on a foreign key while having
 them ignored on a MySQL backend, use a custom compile rule::
@@ -601,7 +613,7 @@ them ignored on a MySQL backend, use a custom compile rule::
 
 .. versionchanged:: 0.9.0 - the MySQL backend no longer silently ignores
    the ``deferrable`` or ``initially`` keyword arguments of
-   :class:`.ForeignKeyConstraint` and :class:`.ForeignKey`.
+   :class:`_schema.ForeignKeyConstraint` and :class:`_schema.ForeignKey`.
 
 The "MATCH" keyword is in fact more insidious, and is explicitly disallowed
 by SQLAlchemy in conjunction with the MySQL backend.  This argument is
@@ -613,7 +625,7 @@ ForeignKeyConstraint at DDL definition time.
 
 .. versionadded:: 0.9.0 - the MySQL backend will raise a
    :class:`.CompileError` when the ``match`` keyword is used with
-   :class:`.ForeignKeyConstraint` or :class:`.ForeignKey`.
+   :class:`_schema.ForeignKeyConstraint` or :class:`_schema.ForeignKey`.
 
 Reflection of Foreign Key Constraints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -645,14 +657,16 @@ these constraints.  However, MySQL does not have a unique constraint
 construct that is separate from a unique index; that is, the "UNIQUE"
 constraint on MySQL is equivalent to creating a "UNIQUE INDEX".
 
-When reflecting these constructs, the :meth:`.Inspector.get_indexes`
-and the :meth:`.Inspector.get_unique_constraints` methods will **both**
+When reflecting these constructs, the
+:meth:`_reflection.Inspector.get_indexes`
+and the :meth:`_reflection.Inspector.get_unique_constraints`
+methods will **both**
 return an entry for a UNIQUE index in MySQL.  However, when performing
 full table reflection using ``Table(..., autoload=True)``,
 the :class:`.UniqueConstraint` construct is
-**not** part of the fully reflected :class:`.Table` construct under any
+**not** part of the fully reflected :class:`_schema.Table` construct under any
 circumstances; this construct is always represented by a :class:`.Index`
-with the ``unique=True`` setting present in the :attr:`.Table.indexes`
+with the ``unique=True`` setting present in the :attr:`_schema.Table.indexes`
 collection.
 
 
@@ -794,6 +808,7 @@ from ...sql import coercions
 from ...sql import compiler
 from ...sql import elements
 from ...sql import roles
+from ...sql import util as sql_util
 from ...types import BINARY
 from ...types import BLOB
 from ...types import BOOLEAN
@@ -1436,19 +1451,22 @@ class MySQLCompiler(compiler.SQLCompiler):
     def get_select_precolumns(self, select, **kw):
         """Add special MySQL keywords in place of DISTINCT.
 
-        .. note::
-
-          this usage is deprecated.  :meth:`.Select.prefix_with`
-          should be used for special keywords at the start
-          of a SELECT.
+        .. deprecated 1.4:: this usage is deprecated.
+           :meth:`_expression.Select.prefix_with` should be used for special
+           keywords at the start of a SELECT.
 
         """
         if isinstance(select._distinct, util.string_types):
+            util.warn_deprecated(
+                "Sending string values for 'distinct' is deprecated in the "
+                "MySQL dialect and will be removed in a future release.  "
+                "Please use :meth:`.Select.prefix_with` for special keywords "
+                "at the start of a SELECT statement",
+                version="1.4",
+            )
             return select._distinct.upper() + " "
-        elif select._distinct:
-            return "DISTINCT "
-        else:
-            return ""
+
+        return super(MySQLCompiler, self).get_select_precolumns(select, **kw)
 
     def visit_join(self, join, asfrom=False, from_linter=None, **kwargs):
         if from_linter:
@@ -1477,9 +1495,28 @@ class MySQLCompiler(compiler.SQLCompiler):
 
     def for_update_clause(self, select, **kw):
         if select._for_update_arg.read:
-            return " LOCK IN SHARE MODE"
+            tmp = " LOCK IN SHARE MODE"
         else:
-            return " FOR UPDATE"
+            tmp = " FOR UPDATE"
+
+        if select._for_update_arg.of and self.dialect.supports_for_update_of:
+
+            tables = util.OrderedSet()
+            for c in select._for_update_arg.of:
+                tables.update(sql_util.surface_selectables_only(c))
+
+            tmp += " OF " + ", ".join(
+                self.process(table, ashint=True, use_schema=False, **kw)
+                for table in tables
+            )
+
+        if select._for_update_arg.nowait:
+            tmp += " NOWAIT"
+
+        if select._for_update_arg.skip_locked and self.dialect._is_mysql:
+            tmp += " SKIP LOCKED"
+
+        return tmp
 
     def limit_clause(self, select, **kw):
         # MySQL supports:
@@ -1570,6 +1607,18 @@ class MySQLCompiler(compiler.SQLCompiler):
                     "_in_%s" % idx for idx, type_ in enumerate(element_types)
                 ),
             }
+        )
+
+    def visit_is_distinct_from_binary(self, binary, operator, **kw):
+        return "NOT (%s <=> %s)" % (
+            self.process(binary.left),
+            self.process(binary.right),
+        )
+
+    def visit_isnot_distinct_from_binary(self, binary, operator, **kw):
+        return "%s <=> %s" % (
+            self.process(binary.left),
+            self.process(binary.right),
         )
 
 
@@ -2129,14 +2178,10 @@ class MySQLTypeCompiler(compiler.GenericTypeCompiler):
         )
 
     def visit_ENUM(self, type_, **kw):
-        return self._visit_enumerated_values(
-            "ENUM", type_, type_._enumerated_values
-        )
+        return self._visit_enumerated_values("ENUM", type_, type_.enums)
 
     def visit_SET(self, type_, **kw):
-        return self._visit_enumerated_values(
-            "SET", type_, type_._enumerated_values
-        )
+        return self._visit_enumerated_values("SET", type_, type_.values)
 
     def visit_BOOLEAN(self, type_, **kw):
         return "BOOL"
@@ -2185,6 +2230,9 @@ class MySQLDialect(default.DefaultDialect):
     # ... may be updated to True for MariaDB 10.3+ in initialize()
 
     sequences_optional = True
+
+    supports_for_update_of = False  # default for MySQL ...
+    # ... may be updated to True for MySQL 8+ in initialize()
 
     supports_sane_rowcount = True
     supports_sane_multi_rowcount = False
@@ -2285,7 +2333,14 @@ class MySQLDialect(default.DefaultDialect):
             cursor.execute("SELECT @@transaction_isolation")
         else:
             cursor.execute("SELECT @@tx_isolation")
-        val = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        if row is None:
+            util.warn(
+                "Could not retrieve transaction isolation level for MySQL "
+                "connection."
+            )
+            raise NotImplementedError()
+        val = row[0]
         cursor.close()
         if util.py3k and isinstance(val, bytes):
             val = val.decode()
@@ -2350,25 +2405,25 @@ class MySQLDialect(default.DefaultDialect):
             raise
 
     def do_begin_twophase(self, connection, xid):
-        connection.execute(sql.text("XA BEGIN :xid"), xid=xid)
+        connection.execute(sql.text("XA BEGIN :xid"), dict(xid=xid))
 
     def do_prepare_twophase(self, connection, xid):
-        connection.execute(sql.text("XA END :xid"), xid=xid)
-        connection.execute(sql.text("XA PREPARE :xid"), xid=xid)
+        connection.execute(sql.text("XA END :xid"), dict(xid=xid))
+        connection.execute(sql.text("XA PREPARE :xid"), dict(xid=xid))
 
     def do_rollback_twophase(
         self, connection, xid, is_prepared=True, recover=False
     ):
         if not is_prepared:
-            connection.execute(sql.text("XA END :xid"), xid=xid)
-        connection.execute(sql.text("XA ROLLBACK :xid"), xid=xid)
+            connection.execute(sql.text("XA END :xid"), dict(xid=xid))
+        connection.execute(sql.text("XA ROLLBACK :xid"), dict(xid=xid))
 
     def do_commit_twophase(
         self, connection, xid, is_prepared=True, recover=False
     ):
         if not is_prepared:
             self.do_prepare_twophase(connection, xid)
-        connection.execute(sql.text("XA COMMIT :xid"), xid=xid)
+        connection.execute(sql.text("XA COMMIT :xid"), dict(xid=xid))
 
     def do_recover_twophase(self, connection):
         resultset = connection.exec_driver_sql("XA RECOVER")
@@ -2472,8 +2527,7 @@ class MySQLDialect(default.DefaultDialect):
                 "WHERE TABLE_NAME=:name AND "
                 "TABLE_SCHEMA=:schema_name"
             ),
-            name=sequence_name,
-            schema_name=schema,
+            dict(name=sequence_name, schema_name=schema),
         )
         return cursor.first() is not None
 
@@ -2493,6 +2547,10 @@ class MySQLDialect(default.DefaultDialect):
 
         self.supports_sequences = (
             self._is_mariadb and self.server_version_info >= (10, 3)
+        )
+
+        self.supports_for_update_of = (
+            self._is_mysql and self.server_version_info >= (8,)
         )
 
         self._needs_correct_for_88718_96365 = (
@@ -2721,7 +2779,7 @@ class MySQLDialect(default.DefaultDialect):
                     :table_data;
                 """
                 ).bindparams(sql.bindparam("table_data", expanding=True)),
-                table_data=col_tuples,
+                dict(table_data=col_tuples),
             )
 
             # in casing=0, table name and schema name come back in their

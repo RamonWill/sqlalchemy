@@ -16,12 +16,14 @@ as the base class for their own corresponding classes.
 import codecs
 import random
 import re
+import time
 import weakref
 
+from . import cursor as _cursor
 from . import interfaces
-from . import result as _result
 from .. import event
 from .. import exc
+from .. import Integer
 from .. import pool
 from .. import processors
 from .. import types as sqltypes
@@ -56,6 +58,8 @@ class DefaultDialect(interfaces.Dialect):
     # most DBAPIs happy with this for execute().
     # not cx_oracle.
     execute_sequence_format = tuple
+
+    sequence_default_column_type = Integer
 
     supports_views = True
     supports_sequences = False
@@ -94,12 +98,12 @@ class DefaultDialect(interfaces.Dialect):
     if util.py3k:
         supports_unicode_statements = True
         supports_unicode_binds = True
-        returns_unicode_strings = True
+        returns_unicode_strings = sqltypes.String.RETURNS_UNICODE
         description_encoding = None
     else:
         supports_unicode_statements = False
         supports_unicode_binds = False
-        returns_unicode_strings = False
+        returns_unicode_strings = sqltypes.String.RETURNS_UNKNOWN
         description_encoding = "use_encoding"
 
     name = "default"
@@ -124,7 +128,12 @@ class DefaultDialect(interfaces.Dialect):
     supports_empty_insert = True
     supports_multivalues_insert = False
 
+    supports_is_distinct_from = True
+
     supports_server_side_cursors = False
+
+    # extra record-level locking features (#4860)
+    supports_for_update_of = False
 
     server_version_info = None
 
@@ -188,14 +197,14 @@ class DefaultDialect(interfaces.Dialect):
     @util.deprecated_params(
         convert_unicode=(
             "1.3",
-            "The :paramref:`.create_engine.convert_unicode` parameter "
+            "The :paramref:`_sa.create_engine.convert_unicode` parameter "
             "and corresponding dialect-level parameters are deprecated, "
             "and will be removed in a future release.  Modern DBAPIs support "
             "Python Unicode natively and this parameter is unnecessary.",
         ),
         empty_in_strategy=(
             "1.4",
-            "The :paramref:`.create_engine.empty_in_strategy` keyword is "
+            "The :paramref:`_sa.create_engine.empty_in_strategy` keyword is "
             "deprecated, and no longer has any effect.  All IN expressions "
             "are now rendered using "
             'the "expanding parameter" strategy which renders a set of bound'
@@ -204,7 +213,7 @@ class DefaultDialect(interfaces.Dialect):
         ),
         case_sensitive=(
             "1.4",
-            "The :paramref:`.create_engine.case_sensitive` parameter "
+            "The :paramref:`_sa.create_engine.case_sensitive` parameter "
             "is deprecated and will be removed in a future release. "
             "Applications should work with result column names in a case "
             "sensitive fashion.",
@@ -323,7 +332,14 @@ class DefaultDialect(interfaces.Dialect):
         except NotImplementedError:
             self.default_isolation_level = None
 
-        self.returns_unicode_strings = self._check_unicode_returns(connection)
+        if self.returns_unicode_strings is sqltypes.String.RETURNS_UNKNOWN:
+            if util.py3k:
+                raise exc.InvalidRequestError(
+                    "RETURNS_UNKNOWN is unsupported in Python 3"
+                )
+            self.returns_unicode_strings = self._check_unicode_returns(
+                connection
+            )
 
         if (
             self.description_encoding is not None
@@ -363,6 +379,8 @@ class DefaultDialect(interfaces.Dialect):
         return None
 
     def _check_unicode_returns(self, connection, additional_tests=None):
+        # this now runs in py2k only and will be removed in 2.0; disabled for
+        # Python 3 in all cases under #5315
         if util.py2k and not self.supports_unicode_statements:
             cast_to = util.binary_type
         else:
@@ -413,9 +431,13 @@ class DefaultDialect(interfaces.Dialect):
         results = {check_unicode(test) for test in tests}
 
         if results.issuperset([True, False]):
-            return "conditional"
+            return sqltypes.String.RETURNS_CONDITIONAL
         else:
-            return results == {True}
+            return (
+                sqltypes.String.RETURNS_UNICODE
+                if results == {True}
+                else sqltypes.String.RETURNS_BYTES
+            )
 
     def _check_unicode_description(self, connection):
         # all DBAPIs on Py2K return cursor.description as encoded
@@ -444,21 +466,10 @@ class DefaultDialect(interfaces.Dialect):
 
         This method looks for a dictionary called
         ``colspecs`` as a class or instance-level variable,
-        and passes on to :func:`.types.adapt_type`.
+        and passes on to :func:`_types.adapt_type`.
 
         """
         return sqltypes.adapt_type(typeobj, self.colspecs)
-
-    def get_pk_constraint(self, conn, table_name, schema=None, **kw):
-        """Compatibility method, adapts the result of get_primary_keys()
-        for those dialects which don't implement get_pk_constraint().
-
-        """
-        return {
-            "constrained_columns": self.get_primary_keys(
-                conn, table_name, schema=schema, **kw
-            )
-        }
 
     def has_index(self, connection, table_name, index_name, schema=None):
         if not self.has_table(connection, table_name, schema=schema):
@@ -495,28 +506,25 @@ class DefaultDialect(interfaces.Dialect):
                 if not branch:
                     self._set_connection_isolation(connection, isolation_level)
 
-        if "schema_translate_map" in opts:
-            engine._schema_translate_map = map_ = opts["schema_translate_map"]
-
-            @event.listens_for(engine, "engine_connect")
-            def set_schema_translate_map(connection, branch):
-                connection._schema_translate_map = map_
-
     def set_connection_execution_options(self, connection, opts):
         if "isolation_level" in opts:
             self._set_connection_isolation(connection, opts["isolation_level"])
 
-        if "schema_translate_map" in opts:
-            connection._schema_translate_map = opts["schema_translate_map"]
-
     def _set_connection_isolation(self, connection, level):
         if connection.in_transaction():
-            util.warn(
-                "Connection is already established with a Transaction; "
-                "setting isolation_level may implicitly rollback or commit "
-                "the existing transaction, or have no effect until "
-                "next transaction"
-            )
+            if connection._is_future:
+                raise exc.InvalidRequestError(
+                    "This connection has already begun a transaction; "
+                    "isolation level may not be altered until transaction end"
+                )
+            else:
+                util.warn(
+                    "Connection is already established with a Transaction; "
+                    "setting isolation_level may implicitly rollback or "
+                    "commit "
+                    "the existing transaction, or have no effect until "
+                    "next transaction"
+                )
         self.set_isolation_level(connection.connection, level)
         connection.connection._connection_record.finalize_callback.append(
             self.reset_isolation_level
@@ -697,10 +705,19 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
     statement = None
     result_column_struct = None
     returned_defaults = None
+    execution_options = util.immutabledict()
+
+    cursor_fetch_strategy = _cursor._DEFAULT_FETCH
+
+    cache_stats = None
+    invoked_statement = None
+
     _is_implicit_returning = False
     _is_explicit_returning = False
     _is_future_result = False
     _is_server_side = False
+
+    _soft_closed = False
 
     # a hook for SQLite's translation of
     # result column names
@@ -710,7 +727,14 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
     _expanded_parameters = util.immutabledict()
 
     @classmethod
-    def _init_ddl(cls, dialect, connection, dbapi_connection, compiled_ddl):
+    def _init_ddl(
+        cls,
+        dialect,
+        connection,
+        dbapi_connection,
+        execution_options,
+        compiled_ddl,
+    ):
         """Initialize execution context for a DDLElement construct."""
 
         self = cls.__new__(cls)
@@ -721,16 +745,22 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         self.compiled = compiled = compiled_ddl
         self.isddl = True
 
-        self.execution_options = compiled.execution_options
-        if connection._execution_options:
-            self.execution_options = dict(self.execution_options)
-            self.execution_options.update(connection._execution_options)
+        self.execution_options = execution_options
+
+        self._is_future_result = (
+            connection._is_future
+            or self.execution_options.get("future_result", False)
+        )
 
         self.unicode_statement = util.text_type(compiled)
         if compiled.schema_translate_map:
+            schema_translate_map = self.execution_options.get(
+                "schema_translate_map", {}
+            )
+
             rst = compiled.preparer._render_schema_translates
             self.unicode_statement = rst(
-                self.unicode_statement, connection._schema_translate_map
+                self.unicode_statement, schema_translate_map
             )
 
         if not dialect.supports_unicode_statements:
@@ -754,10 +784,12 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         dialect,
         connection,
         dbapi_connection,
+        execution_options,
         compiled,
         parameters,
         invoked_statement,
         extracted_parameters,
+        cache_hit=False,
     ):
         """Initialize execution context for a Compiled construct."""
 
@@ -768,16 +800,13 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         self.extracted_parameters = extracted_parameters
         self.invoked_statement = invoked_statement
         self.compiled = compiled
+        self.cache_hit = cache_hit
 
-        # this should be caught in the engine before
-        # we get here
-        assert compiled.can_execute
+        self.execution_options = execution_options
 
-        self._is_future_result = connection._execution_options.get(
-            "future_result", False
-        )
-        self.execution_options = compiled.execution_options.union(
-            connection._execution_options
+        self._is_future_result = (
+            connection._is_future
+            or self.execution_options.get("future_result", False)
         )
 
         self.result_column_struct = (
@@ -794,7 +823,7 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         if self.isinsert or self.isupdate or self.isdelete:
             self.is_crud = True
             self._is_explicit_returning = bool(compiled.statement._returning)
-            self._is_implicit_returning = bool(
+            self._is_implicit_returning = (
                 compiled.returning and not compiled.statement._returning
             )
 
@@ -818,7 +847,10 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
 
         # this must occur before create_cursor() since the statement
         # has to be regexed in some cases for server side cursor
-        self.unicode_statement = util.text_type(compiled)
+        if util.py2k:
+            self.unicode_statement = util.text_type(compiled.string)
+        else:
+            self.unicode_statement = compiled.string
 
         self.cursor = self.create_cursor()
 
@@ -854,9 +886,12 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
             positiontup = self.compiled.positiontup
 
         if compiled.schema_translate_map:
+            schema_translate_map = self.execution_options.get(
+                "schema_translate_map", {}
+            )
             rst = compiled.preparer._render_schema_translates
             self.unicode_statement = rst(
-                self.unicode_statement, connection._schema_translate_map
+                self.unicode_statement, schema_translate_map
             )
 
         # final self.unicode_statement is now assigned, encode if needed
@@ -883,28 +918,24 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
                 parameters.append(dialect.execute_sequence_format(param))
         else:
             encode = not dialect.supports_unicode_statements
+            if encode:
+                encoder = dialect._encoder
             for compiled_params in self.compiled_parameters:
 
                 if encode:
-                    param = dict(
-                        (
-                            dialect._encoder(key)[0],
-                            processors[key](compiled_params[key])
-                            if key in processors
-                            else compiled_params[key],
-                        )
+                    param = {
+                        encoder(key)[0]: processors[key](compiled_params[key])
+                        if key in processors
+                        else compiled_params[key]
                         for key in compiled_params
-                    )
+                    }
                 else:
-                    param = dict(
-                        (
-                            key,
-                            processors[key](compiled_params[key])
-                            if key in processors
-                            else compiled_params[key],
-                        )
+                    param = {
+                        key: processors[key](compiled_params[key])
+                        if key in processors
+                        else compiled_params[key]
                         for key in compiled_params
-                    )
+                    }
 
                 parameters.append(param)
 
@@ -914,7 +945,13 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
 
     @classmethod
     def _init_statement(
-        cls, dialect, connection, dbapi_connection, statement, parameters
+        cls,
+        dialect,
+        connection,
+        dbapi_connection,
+        execution_options,
+        statement,
+        parameters,
     ):
         """Initialize execution context for a string SQL statement."""
 
@@ -924,12 +961,12 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         self.dialect = connection.dialect
         self.is_text = True
 
-        self._is_future_result = connection._execution_options.get(
-            "future_result", False
-        )
+        self.execution_options = execution_options
 
-        # plain text statement
-        self.execution_options = connection._execution_options
+        self._is_future_result = (
+            connection._is_future
+            or self.execution_options.get("future_result", False)
+        )
 
         if not parameters:
             if self.dialect.positional:
@@ -965,16 +1002,37 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         return self
 
     @classmethod
-    def _init_default(cls, dialect, connection, dbapi_connection):
+    def _init_default(
+        cls, dialect, connection, dbapi_connection, execution_options
+    ):
         """Initialize execution context for a ColumnDefault construct."""
 
         self = cls.__new__(cls)
         self.root_connection = connection
         self._dbapi_connection = dbapi_connection
         self.dialect = connection.dialect
-        self.execution_options = connection._execution_options
+
+        self.execution_options = execution_options
+
+        self._is_future_result = (
+            connection._is_future
+            or self.execution_options.get("future_result", False)
+        )
+
         self.cursor = self.create_cursor()
         return self
+
+    def _get_cache_stats(self):
+        if self.compiled is None:
+            return "raw sql"
+
+        now = time.time()
+        if self.compiled.cache_key is None:
+            return "no key %.5fs" % (now - self.compiled._gen_time,)
+        elif self.cache_hit:
+            return "cached for %.4gs" % (now - self.compiled._gen_time,)
+        else:
+            return "generated in %.5fs" % (now - self.compiled._gen_time,)
 
     @util.memoized_property
     def engine(self):
@@ -1052,7 +1110,11 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
 
     @property
     def connection(self):
-        return self.root_connection._branch()
+        conn = self.root_connection
+        if conn._is_future:
+            return conn
+        else:
+            return conn._branch()
 
     def should_autocommit_text(self, statement):
         return AUTOCOMMIT_REGEXP.match(statement)
@@ -1090,7 +1152,17 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         return use_server_side
 
     def create_cursor(self):
-        if self._use_server_side_cursor():
+        if (
+            # inlining initial preference checks for SS cursors
+            self.dialect.supports_server_side_cursors
+            and (
+                self.execution_options.get("stream_results", False)
+                or (
+                    self.dialect.server_side_cursors
+                    and self._use_server_side_cursor()
+                )
+            )
+        ):
             self._is_server_side = True
             return self.create_server_side_cursor()
         else:
@@ -1143,14 +1215,6 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
     def handle_dbapi_exception(self, e):
         pass
 
-    def get_result_cursor_strategy(self, result):
-        if self._is_server_side:
-            strat_cls = _result.BufferedRowCursorFetchStrategy
-        else:
-            strat_cls = _result.DefaultCursorFetchStrategy
-
-        return strat_cls.create(result)
-
     @property
     def rowcount(self):
         return self.cursor.rowcount
@@ -1163,9 +1227,28 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
 
     def _setup_result_proxy(self):
         if self.is_crud or self.is_text:
-            result = self._setup_crud_result_proxy()
+            result = self._setup_dml_or_text_result()
         else:
-            result = _result.ResultProxy._create_for_context(self)
+            strategy = self.cursor_fetch_strategy
+            if self._is_server_side and strategy is _cursor._DEFAULT_FETCH:
+                strategy = _cursor.BufferedRowCursorFetchStrategy(
+                    self.cursor, self.execution_options
+                )
+            cursor_description = (
+                strategy.alternate_cursor_description
+                or self.cursor.description
+            )
+            if cursor_description is None:
+                strategy = _cursor._NO_CURSOR_DQL
+
+            if self._is_future_result:
+                result = _cursor.CursorResult(
+                    self, strategy, cursor_description
+                )
+            else:
+                result = _cursor.LegacyCursorResult(
+                    self, strategy, cursor_description
+                )
 
         if (
             self.compiled
@@ -1173,6 +1256,8 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
             and self.compiled.has_out_parameters
         ):
             self._setup_out_parameters(result)
+
+        self._soft_closed = result._soft_closed
 
         return result
 
@@ -1204,7 +1289,7 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
 
         result.out_parameters = out_parameters
 
-    def _setup_crud_result_proxy(self):
+    def _setup_dml_or_text_result(self):
         if self.isinsert and not self.executemany:
             if (
                 not self._is_implicit_returning
@@ -1217,25 +1302,55 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
             elif not self._is_implicit_returning:
                 self._setup_ins_pk_from_empty()
 
-        result = _result.ResultProxy._create_for_context(self)
+        strategy = self.cursor_fetch_strategy
+        if self._is_server_side and strategy is _cursor._DEFAULT_FETCH:
+            strategy = _cursor.BufferedRowCursorFetchStrategy(
+                self.cursor, self.execution_options
+            )
+        cursor_description = (
+            strategy.alternate_cursor_description or self.cursor.description
+        )
+        if cursor_description is None:
+            strategy = _cursor._NO_CURSOR_DML
+
+        if self._is_future_result:
+            result = _cursor.CursorResult(self, strategy, cursor_description)
+        else:
+            result = _cursor.LegacyCursorResult(
+                self, strategy, cursor_description
+            )
 
         if self.isinsert:
             if self._is_implicit_returning:
-                row = result._onerow()
+                row = result.fetchone()
                 self.returned_defaults = row
                 self._setup_ins_pk_from_implicit_returning(row)
+
+                # test that it has a cursor metadata that is accurate.
+                # the first row will have been fetched and current assumptions
+                # are that the result has only one row, until executemany()
+                # support is added here.
+                assert result._metadata.returns_rows
                 result._soft_close()
-                result._metadata = None
             elif not self._is_explicit_returning:
                 result._soft_close()
-                result._metadata = None
+
+                # we assume here the result does not return any rows.
+                # *usually*, this will be true.  However, some dialects
+                # such as that of MSSQL/pyodbc need to SELECT a post fetch
+                # function so this is not necessarily true.
+                # assert not result.returns_rows
+
         elif self.isupdate and self._is_implicit_returning:
-            row = result._onerow()
+            row = result.fetchone()
             self.returned_defaults = row
             result._soft_close()
-            result._metadata = None
 
-        elif result._metadata is None:
+            # test that it has a cursor metadata that is accurate.
+            # the rows have all been fetched however.
+            assert result._metadata.returns_rows
+
+        elif not result._metadata.returns_rows:
             # no results, get rowcount
             # (which requires open cursor on some drivers
             # such as kintersbasdb, mxodbc)
@@ -1455,12 +1570,13 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
     generation function, e.g. as described at :ref:`context_default_functions`.
     It consists of a dictionary which includes entries for each column/value
     pair that is to be part of the INSERT or UPDATE statement. The keys of the
-    dictionary will be the key value of each :class:`.Column`, which is usually
+    dictionary will be the key value of each :class:`_schema.Column`,
+    which is usually
     synonymous with the name.
 
     Note that the :attr:`.DefaultExecutionContext.current_parameters` attribute
     does not accommodate for the "multi-values" feature of the
-    :meth:`.Insert.values` method.  The
+    :meth:`_expression.Insert.values` method.  The
     :meth:`.DefaultExecutionContext.get_current_parameters` method should be
     preferred.
 
@@ -1480,11 +1596,13 @@ class DefaultExecutionContext(interfaces.ExecutionContext):
         :ref:`context_default_functions`. When invoked, a dictionary is
         returned which includes entries for each column/value pair that is part
         of the INSERT or UPDATE statement. The keys of the dictionary will be
-        the key value of each :class:`.Column`, which is usually synonymous
+        the key value of each :class:`_schema.Column`,
+        which is usually synonymous
         with the name.
 
         :param isolate_multiinsert_groups=True: indicates that multi-valued
-         INSERT constructs created using :meth:`.Insert.values` should be
+         INSERT constructs created using :meth:`_expression.Insert.values`
+         should be
          handled by returning only the subset of parameters that are local
          to the current column default invocation.   When ``False``, the
          raw parameters of the statement are returned including the

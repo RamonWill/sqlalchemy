@@ -50,7 +50,8 @@ class EnumTest(fixtures.TestBase):
 
 
 class CacheKeyTest(fixtures.TestBase):
-    __requires__ = ("cpython", "python_profiling_backend")
+    # python3 is just to have less variability in test counts
+    __requires__ = ("cpython", "python_profiling_backend", "python3")
 
     @testing.fixture(scope="class")
     def mapping_fixture(self):
@@ -110,6 +111,7 @@ class CacheKeyTest(fixtures.TestBase):
         current_key = None
         for stmt in stmt_fixture_one:
             key = stmt._generate_cache_key()
+            assert key is not None
             if current_key:
                 eq_(key, current_key)
             else:
@@ -120,6 +122,7 @@ class CacheKeyTest(fixtures.TestBase):
         current_key = None
         for stmt in stmt_fixture_one:
             key = stmt._generate_cache_key()
+            assert key is not None
             if current_key:
                 eq_(key, current_key)
             else:

@@ -21,6 +21,7 @@ from .schema import DefaultClause  # noqa
 from .schema import FetchedValue  # noqa
 from .schema import ForeignKey  # noqa
 from .schema import ForeignKeyConstraint  # noqa
+from .schema import IdentityOptions  # noqa
 from .schema import Index  # noqa
 from .schema import MetaData  # noqa
 from .schema import PrimaryKeyConstraint  # noqa
@@ -82,7 +83,6 @@ from .types import ARRAY  # noqa
 from .types import BIGINT  # noqa
 from .types import BigInteger  # noqa
 from .types import BINARY  # noqa
-from .types import Binary  # noqa
 from .types import BLOB  # noqa
 from .types import BOOLEAN  # noqa
 from .types import Boolean  # noqa
@@ -141,6 +141,10 @@ def __go(lcls):
     )
 
     _sa_util.preloaded.import_prefix("sqlalchemy")
+
+    from . import exc
+
+    exc._version_token = "".join(__version__.split(".")[0:2])
 
 
 __go(locals())

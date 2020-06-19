@@ -19,7 +19,7 @@ individual suites to be run::
     $ python -m examples.performance --help
     usage: python -m examples.performance [-h] [--test TEST] [--dburl DBURL]
                                           [--num NUM] [--profile] [--dump]
-                                          [--runsnake] [--echo]
+                                          [--echo]
 
                                           {bulk_inserts,large_resultsets,single_inserts}
 
@@ -35,7 +35,6 @@ individual suites to be run::
                             default is module-specific
       --profile             run profiling and dump call counts
       --dump                dump full call profile (implies --profile)
-      --runsnake            invoke runsnakerun (implies --profile)
       --echo                Echo SQL output
 
 An example run looks like::
@@ -107,15 +106,6 @@ individual tests::
 
         ...
 
-Using RunSnake
---------------
-
-This option requires the `RunSnake <https://pypi.python.org/pypi/RunSnakeRun>`_
-command line tool be installed::
-
-    $ python -m examples.performance single_inserts --test test_core --num 1000 --runsnake
-
-A graphical RunSnake output will be displayed.
 
 .. _examples_profiling_writeyourown:
 
@@ -213,13 +203,11 @@ We can run our new script directly::
     test_joinedload : load everything, joined eager loading. (1000 iterations); total time 2.754592 sec
     test_subqueryload : load everything, subquery eager loading. (1000 iterations); total time 2.977696 sec
 
-As well as see RunSnake output for an individual test::
-
-    $ python test_loads.py  --num 100 --runsnake --test test_joinedload
 
 """  # noqa
 import argparse
 import cProfile
+import gc
 import os
 import pstats
 import re
@@ -238,12 +226,14 @@ class Profiler(object):
     def __init__(self, options):
         self.test = options.test
         self.dburl = options.dburl
-        self.runsnake = options.runsnake
         self.profile = options.profile
         self.dump = options.dump
+        self.raw = options.raw
         self.callers = options.callers
         self.num = options.num
         self.echo = options.echo
+        self.sort = options.sort
+        self.gc = options.gc
         self.stats = []
 
     @classmethod
@@ -292,7 +282,7 @@ class Profiler(object):
             self._run_test(test)
             self.stats[-1].report()
 
-    def _run_with_profile(self, fn):
+    def _run_with_profile(self, fn, sort):
         pr = cProfile.Profile()
         pr.enable()
         try:
@@ -300,9 +290,9 @@ class Profiler(object):
         finally:
             pr.disable()
 
-        stats = pstats.Stats(pr).sort_stats("cumulative")
+        stats = pstats.Stats(pr)
 
-        self.stats.append(TestResult(self, fn, stats=stats))
+        self.stats.append(TestResult(self, fn, stats=stats, sort=sort))
         return result
 
     def _run_with_time(self, fn):
@@ -316,10 +306,15 @@ class Profiler(object):
     def _run_test(self, fn):
         if self._setup:
             self._setup(self.dburl, self.echo, self.num)
-        if self.profile or self.runsnake or self.dump:
-            self._run_with_profile(fn)
+        if self.gc:
+            # gc.set_debug(gc.DEBUG_COLLECTABLE)
+            gc.set_debug(gc.DEBUG_STATS)
+        if self.profile or self.dump:
+            self._run_with_profile(fn, self.sort)
         else:
             self._run_with_time(fn)
+        if self.gc:
+            gc.set_debug(0)
 
     @classmethod
     def main(cls):
@@ -359,9 +354,20 @@ class Profiler(object):
             help="run profiling and dump call counts",
         )
         parser.add_argument(
+            "--sort",
+            type=str,
+            default="cumulative",
+            help="profiling sort, defaults to cumulative",
+        )
+        parser.add_argument(
             "--dump",
             action="store_true",
             help="dump full call profile (implies --profile)",
+        )
+        parser.add_argument(
+            "--raw",
+            type=str,
+            help="dump raw profile data to file (implies --profile)",
         )
         parser.add_argument(
             "--callers",
@@ -369,9 +375,7 @@ class Profiler(object):
             help="print callers as well (implies --dump)",
         )
         parser.add_argument(
-            "--runsnake",
-            action="store_true",
-            help="invoke runsnakerun (implies --profile)",
+            "--gc", action="store_true", help="turn on GC debug stats"
         )
         parser.add_argument(
             "--echo", action="store_true", help="Echo SQL output"
@@ -379,7 +383,7 @@ class Profiler(object):
         args = parser.parse_args()
 
         args.dump = args.dump or args.callers
-        args.profile = args.profile or args.dump or args.runsnake
+        args.profile = args.profile or args.dump or args.raw
 
         if cls.name is None:
             __import__(__name__ + "." + args.name)
@@ -397,11 +401,14 @@ class Profiler(object):
 
 
 class TestResult(object):
-    def __init__(self, profile, test, stats=None, total_time=None):
+    def __init__(
+        self, profile, test, stats=None, total_time=None, sort="cumulative"
+    ):
         self.profile = profile
         self.test = test
         self.stats = stats
         self.total_time = total_time
+        self.sort = sort
 
     def report(self):
         print(self._summary())
@@ -421,21 +428,16 @@ class TestResult(object):
         return summary
 
     def report_stats(self):
-        if self.profile.runsnake:
-            self._runsnake()
-        elif self.profile.dump:
-            self._dump()
+        if self.profile.dump:
+            self._dump(self.sort)
+        elif self.profile.raw:
+            self._dump_raw()
 
-    def _dump(self):
-        self.stats.sort_stats("time", "calls")
+    def _dump(self, sort):
+        self.stats.sort_stats(*re.split(r"[ ,]", self.sort))
         self.stats.print_stats()
         if self.profile.callers:
             self.stats.print_callers()
 
-    def _runsnake(self):
-        filename = "%s.profile" % self.test.__name__
-        try:
-            self.stats.dump_stats(filename)
-            os.system("runsnake %s" % filename)
-        finally:
-            os.remove(filename)
+    def _dump_raw(self):
+        self.stats.dump_stats(self.profile.raw)

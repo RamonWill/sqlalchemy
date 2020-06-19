@@ -13,6 +13,7 @@ from sqlalchemy import exists
 from sqlalchemy import extract
 from sqlalchemy import Float
 from sqlalchemy import Integer
+from sqlalchemy import literal_column
 from sqlalchemy import MetaData
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -28,6 +29,7 @@ from sqlalchemy import util
 from sqlalchemy import values
 from sqlalchemy.dialects import mysql
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.future import select as future_select
 from sqlalchemy.schema import Sequence
 from sqlalchemy.sql import bindparam
 from sqlalchemy.sql import ColumnElement
@@ -42,6 +44,7 @@ from sqlalchemy.sql.base import HasCacheKey
 from sqlalchemy.sql.elements import _label_reference
 from sqlalchemy.sql.elements import _textual_label_reference
 from sqlalchemy.sql.elements import Annotated
+from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.elements import ClauseList
 from sqlalchemy.sql.elements import CollationClause
@@ -67,6 +70,8 @@ from sqlalchemy.testing import is_not_
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import ne_
 from sqlalchemy.testing.util import random_choices
+from sqlalchemy.types import ARRAY
+from sqlalchemy.types import JSON
 from sqlalchemy.util import class_hierarchy
 
 meta = MetaData()
@@ -86,9 +91,31 @@ table_a_2_bs = Table(
 
 table_b = Table("b", meta, Column("a", Integer), Column("b", Integer))
 
+table_b_b = Table(
+    "b_b",
+    meta,
+    Column("a", Integer),
+    Column("b", Integer),
+    Column("c", Integer),
+    Column("d", Integer),
+    Column("e", Integer),
+)
+
 table_c = Table("c", meta, Column("x", Integer), Column("y", Integer))
 
 table_d = Table("d", meta, Column("y", Integer), Column("z", Integer))
+
+
+def opt1(ctx):
+    pass
+
+
+def opt2(ctx):
+    pass
+
+
+def opt3(ctx):
+    pass
 
 
 class MyEntity(HasCacheKey):
@@ -165,6 +192,10 @@ class CoreFixtures(object):
             column("q").like("somstr", escape="X"),
         ),
         lambda: (
+            column("q", ARRAY(Integer))[3] == 5,
+            column("q", ARRAY(Integer))[3:5] == 5,
+        ),
+        lambda: (
             table_a.c.a,
             table_a.c.a._annotate({"orm": True}),
             table_a.c.a._annotate({"orm": True})._annotate({"bar": False}),
@@ -209,6 +240,15 @@ class CoreFixtures(object):
             cast(column("q"), Integer),
             cast(column("q"), Float),
             cast(column("p"), Integer),
+        ),
+        lambda: (
+            column("x", JSON)["key1"],
+            column("x", JSON)["key1"].as_boolean(),
+            column("x", JSON)["key1"].as_float(),
+            column("x", JSON)["key1"].as_integer(),
+            column("x", JSON)["key1"].as_string(),
+            column("y", JSON)["key1"].as_integer(),
+            column("y", JSON)["key1"].as_string(),
         ),
         lambda: (
             bindparam("x"),
@@ -311,6 +351,11 @@ class CoreFixtures(object):
             select([table_a.c.a]),
             select([table_a.c.a, table_a.c.b]),
             select([table_a.c.b, table_a.c.a]),
+            select([table_a.c.b, table_a.c.a]).limit(5),
+            select([table_a.c.b, table_a.c.a]).limit(5).offset(10),
+            select([table_a.c.b, table_a.c.a])
+            .limit(literal_column("foobar"))
+            .offset(10),
             select([table_a.c.b, table_a.c.a]).apply_labels(),
             select([table_a.c.a]).where(table_a.c.b == 5),
             select([table_a.c.a])
@@ -324,6 +369,28 @@ class CoreFixtures(object):
             select([table_a.c.a])
             .where(table_a.c.b == 5)
             .correlate_except(table_b),
+        ),
+        lambda: (
+            future_select(table_a.c.a),
+            future_select(table_a.c.a).join(
+                table_b, table_a.c.a == table_b.c.a
+            ),
+            future_select(table_a.c.a).join_from(
+                table_a, table_b, table_a.c.a == table_b.c.a
+            ),
+            future_select(table_a.c.a).join_from(table_a, table_b),
+            future_select(table_a.c.a).join_from(table_c, table_b),
+            future_select(table_a.c.a)
+            .join(table_b, table_a.c.a == table_b.c.a)
+            .join(table_c, table_b.c.b == table_c.c.x),
+            future_select(table_a.c.a).join(table_b),
+            future_select(table_a.c.a).join(table_c),
+            future_select(table_a.c.a).join(
+                table_b, table_a.c.a == table_b.c.b
+            ),
+            future_select(table_a.c.a).join(
+                table_c, table_a.c.a == table_c.c.x
+            ),
         ),
         lambda: (
             select([table_a.c.a]).cte(),
@@ -610,6 +677,120 @@ class CoreFixtures(object):
 
     fixtures.append(_complex_fixtures)
 
+    def _statements_w_context_options_fixtures():
+
+        return [
+            select([table_a])._add_context_option(opt1, True),
+            select([table_a])._add_context_option(opt1, 5),
+            select([table_a])
+            ._add_context_option(opt1, True)
+            ._add_context_option(opt2, True),
+            select([table_a])
+            ._add_context_option(opt1, True)
+            ._add_context_option(opt2, 5),
+            select([table_a])._add_context_option(opt3, True),
+        ]
+
+    fixtures.append(_statements_w_context_options_fixtures)
+
+    def _statements_w_anonymous_col_names():
+        def one():
+            c = column("q")
+
+            l = c.label(None)
+
+            # new case as of Id810f485c5f7ed971529489b84694e02a3356d6d
+            subq = select([l]).subquery()
+
+            # this creates a ColumnClause as a proxy to the Label() that has
+            # an anoymous name, so the column has one too.
+            anon_col = subq.c[0]
+
+            # then when BindParameter is created, it checks the label
+            # and doesn't double up on the anonymous name which is uncachable
+            return anon_col > 5
+
+        def two():
+            c = column("p")
+
+            l = c.label(None)
+
+            # new case as of Id810f485c5f7ed971529489b84694e02a3356d6d
+            subq = select([l]).subquery()
+
+            # this creates a ColumnClause as a proxy to the Label() that has
+            # an anoymous name, so the column has one too.
+            anon_col = subq.c[0]
+
+            # then when BindParameter is created, it checks the label
+            # and doesn't double up on the anonymous name which is uncachable
+            return anon_col > 5
+
+        def three():
+
+            l1, l2 = table_a.c.a.label(None), table_a.c.b.label(None)
+
+            stmt = select([table_a.c.a, table_a.c.b, l1, l2])
+
+            subq = stmt.subquery()
+            return select([subq]).where(subq.c[2] == 10)
+
+        return (
+            one(),
+            two(),
+            three(),
+        )
+
+    fixtures.append(_statements_w_anonymous_col_names)
+
+    def _update_dml_w_dicts():
+        return (
+            table_b_b.update().values(
+                {
+                    table_b_b.c.a: 5,
+                    table_b_b.c.b: 5,
+                    table_b_b.c.c: 5,
+                    table_b_b.c.d: 5,
+                }
+            ),
+            # equivalent, but testing dictionary insert ordering as cache key
+            # / compare
+            table_b_b.update().values(
+                {
+                    table_b_b.c.a: 5,
+                    table_b_b.c.c: 5,
+                    table_b_b.c.b: 5,
+                    table_b_b.c.d: 5,
+                }
+            ),
+            table_b_b.update().values(
+                {table_b_b.c.a: 5, table_b_b.c.b: 5, "c": 5, table_b_b.c.d: 5}
+            ),
+            table_b_b.update().values(
+                {
+                    table_b_b.c.a: 5,
+                    table_b_b.c.b: 5,
+                    table_b_b.c.c: 5,
+                    table_b_b.c.d: 5,
+                    table_b_b.c.e: 10,
+                }
+            ),
+            table_b_b.update()
+            .values(
+                {
+                    table_b_b.c.a: 5,
+                    table_b_b.c.b: 5,
+                    table_b_b.c.c: 5,
+                    table_b_b.c.d: 5,
+                    table_b_b.c.e: 10,
+                }
+            )
+            .where(table_b_b.c.c > 10),
+        )
+
+    if util.py37:
+        fixtures.append(_update_dml_w_dicts)
+
 
 class CacheKeyFixture(object):
     def _run_cache_key_fixture(self, fixture, compare_values):
@@ -630,7 +811,7 @@ class CacheKeyFixture(object):
                     continue
 
                 eq_(a_key.key, b_key.key)
-                eq_(hash(a_key), hash(b_key))
+                eq_(hash(a_key.key), hash(b_key.key))
 
                 for a_param, b_param in zip(
                     a_key.bindparams, b_key.bindparams
@@ -668,28 +849,25 @@ class CacheKeyFixture(object):
                     ne_(a_key.key, b_key.key)
 
             # ClauseElement-specific test to ensure the cache key
-            # collected all the bound parameters
+            # collected all the bound parameters that aren't marked
+            # as "literal execute"
             if isinstance(case_a[a], ClauseElement) and isinstance(
                 case_b[b], ClauseElement
             ):
                 assert_a_params = []
                 assert_b_params = []
-                visitors.traverse_depthfirst(
-                    case_a[a], {}, {"bindparam": assert_a_params.append}
-                )
-                visitors.traverse_depthfirst(
-                    case_b[b], {}, {"bindparam": assert_b_params.append}
-                )
+
+                for elem in visitors.iterate(case_a[a]):
+                    if elem.__visit_name__ == "bindparam":
+                        assert_a_params.append(elem)
+
+                for elem in visitors.iterate(case_b[b]):
+                    if elem.__visit_name__ == "bindparam":
+                        assert_b_params.append(elem)
 
                 # note we're asserting the order of the params as well as
                 # if there are dupes or not.  ordering has to be
                 # deterministic and matches what a traversal would provide.
-                # regular traverse_depthfirst does produce dupes in cases
-                # like
-                # select([some_alias]).
-                #    select_from(join(some_alias, other_table))
-                # where a bound parameter is inside of some_alias.  the
-                # cache key case is more minimalistic
                 eq_(
                     sorted(a_key.bindparams, key=lambda b: b.key),
                     sorted(
@@ -753,6 +931,39 @@ class CacheKeyTest(CacheKeyFixture, CoreFixtures, fixtures.TestBase):
         ]:
             for fixture in fixtures_:
                 self._run_cache_key_fixture(fixture, compare_values)
+
+    def test_literal_binds(self):
+        def fixture():
+            return (
+                bindparam(None, value="x", literal_execute=True),
+                bindparam(None, value="y", literal_execute=True),
+            )
+
+        self._run_cache_key_fixture(
+            fixture, True,
+        )
+
+    def test_bindparam_subclass_nocache(self):
+        # does not implement inherit_cache
+        class _literal_bindparam(BindParameter):
+            pass
+
+        l1 = _literal_bindparam(None, value="x1")
+        is_(l1._generate_cache_key(), None)
+
+    def test_bindparam_subclass_ok_cache(self):
+        # implements inherit_cache
+        class _literal_bindparam(BindParameter):
+            inherit_cache = True
+
+        def fixture():
+            return (
+                _literal_bindparam(None, value="x1"),
+                _literal_bindparam(None, value="x2"),
+                _literal_bindparam(None),
+            )
+
+        self._run_cache_key_fixture(fixture, True)
 
     def test_cache_key_unknown_traverse(self):
         class Foobar1(ClauseElement):
@@ -992,29 +1203,33 @@ class CompareAndCopyTest(CoreFixtures, fixtures.TestBase):
 
 
 class CompareClausesTest(fixtures.TestBase):
-    def test_compare_metadata_tables(self):
-        # metadata Table objects cache on their own identity, not their
-        # structure.   This is mainly to reduce the size of cache keys
-        # as well as reduce computational overhead, as Table objects have
-        # very large internal state and they are also generally global
-        # objects.
+    def test_compare_metadata_tables_annotations_one(self):
+        # test that cache keys from annotated version of tables refresh
+        # properly
 
         t1 = Table("a", MetaData(), Column("q", Integer), Column("p", Integer))
         t2 = Table("a", MetaData(), Column("q", Integer), Column("p", Integer))
 
         ne_(t1._generate_cache_key(), t2._generate_cache_key())
 
-        eq_(t1._generate_cache_key().key, (t1, "_annotations", ()))
+        eq_(t1._generate_cache_key().key, (t1,))
 
-    def test_compare_metadata_tables_annotations(self):
-        # metadata Table objects cache on their own identity, not their
-        # structure.   This is mainly to reduce the size of cache keys
-        # as well as reduce computational overhead, as Table objects have
-        # very large internal state and they are also generally global
-        # objects.
+        t2 = t1._annotate({"foo": "bar"})
+        eq_(
+            t2._generate_cache_key().key,
+            (t1, "_annotations", (("foo", "bar"),)),
+        )
+        eq_(
+            t2._annotate({"bat": "bar"})._generate_cache_key().key,
+            (t1, "_annotations", (("bat", "bar"), ("foo", "bar"))),
+        )
+
+    def test_compare_metadata_tables_annotations_two(self):
 
         t1 = Table("a", MetaData(), Column("q", Integer), Column("p", Integer))
         t2 = Table("a", MetaData(), Column("q", Integer), Column("p", Integer))
+
+        eq_(t2._generate_cache_key().key, (t2,))
 
         t1 = t1._annotate({"orm": True})
         t2 = t2._annotate({"orm": True})
@@ -1106,6 +1321,30 @@ class CompareClausesTest(fixtures.TestBase):
         )
 
         is_false(l1.compare(l2))
+
+    def test_cache_key_limit_offset_values(self):
+        s1 = select([column("q")]).limit(10)
+        s2 = select([column("q")]).limit(25)
+        s3 = select([column("q")]).limit(25).offset(5)
+        s4 = select([column("q")]).limit(25).offset(18)
+        s5 = select([column("q")]).limit(7).offset(12)
+        s6 = select([column("q")]).limit(literal_column("q")).offset(12)
+
+        for should_eq_left, should_eq_right in [(s1, s2), (s3, s4), (s3, s5)]:
+            eq_(
+                should_eq_left._generate_cache_key().key,
+                should_eq_right._generate_cache_key().key,
+            )
+
+        for shouldnt_eq_left, shouldnt_eq_right in [
+            (s1, s3),
+            (s5, s6),
+            (s2, s3),
+        ]:
+            ne_(
+                shouldnt_eq_left._generate_cache_key().key,
+                shouldnt_eq_right._generate_cache_key().key,
+            )
 
     def test_compare_labels(self):
         is_true(column("q").label(None).compare(column("q").label(None)))

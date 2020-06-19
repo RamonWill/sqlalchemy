@@ -12,7 +12,7 @@ as actively in the load/persist ORM loop.
 """
 
 from . import attributes
-from . import query
+from . import util as orm_util
 from .interfaces import MapperProperty
 from .interfaces import PropComparator
 from .util import _none_set
@@ -362,7 +362,7 @@ class CompositeProperty(DescriptorProperty):
     def _comparator_factory(self, mapper):
         return self.comparator_factory(self, mapper)
 
-    class CompositeBundle(query.Bundle):
+    class CompositeBundle(orm_util.Bundle):
         def __init__(self, property_, expr):
             self.property = property_
             super(CompositeProperty.CompositeBundle, self).__init__(
@@ -411,7 +411,6 @@ class CompositeProperty(DescriptorProperty):
         def expression(self):
             clauses = self.clauses._annotate(
                 {
-                    "bundle": True,
                     "parententity": self._parententity,
                     "parentmapper": self._parententity,
                     "orm_key": self.prop.key,
@@ -420,6 +419,9 @@ class CompositeProperty(DescriptorProperty):
             return CompositeProperty.CompositeBundle(self.prop, clauses)
 
         def _bulk_update_tuples(self, value):
+            if isinstance(value, sql.elements.BindParameter):
+                value = value.value
+
             if value is None:
                 values = [None for key in self.prop._attribute_keys]
             elif isinstance(value, self.prop.composite_class):
@@ -550,14 +552,18 @@ class SynonymProperty(DescriptorProperty):
 
         :param map_column: **For classical mappings and mappings against
           an existing Table object only**.  if ``True``, the :func:`.synonym`
-          construct will locate the :class:`.Column` object upon the mapped
+          construct will locate the :class:`_schema.Column`
+          object upon the mapped
           table that would normally be associated with the attribute name of
           this synonym, and produce a new :class:`.ColumnProperty` that instead
-          maps this :class:`.Column` to the alternate name given as the "name"
+          maps this :class:`_schema.Column`
+          to the alternate name given as the "name"
           argument of the synonym; in this way, the usual step of redefining
-          the mapping of the :class:`.Column` to be under a different name is
+          the mapping of the :class:`_schema.Column`
+          to be under a different name is
           unnecessary. This is usually intended to be used when a
-          :class:`.Column` is to be replaced with an attribute that also uses a
+          :class:`_schema.Column`
+          is to be replaced with an attribute that also uses a
           descriptor, that is, in conjunction with the
           :paramref:`.synonym.descriptor` parameter::
 
@@ -705,90 +711,3 @@ class SynonymProperty(DescriptorProperty):
             p._mapped_by_synonym = self.key
 
         self.parent = parent
-
-
-@util.deprecated_cls(
-    "0.7",
-    ":func:`.comparable_property` is deprecated and will be removed in a "
-    "future release.  Please refer to the :mod:`~sqlalchemy.ext.hybrid` "
-    "extension.",
-)
-class ComparableProperty(DescriptorProperty):
-    """Instruments a Python property for use in query expressions."""
-
-    def __init__(
-        self, comparator_factory, descriptor=None, doc=None, info=None
-    ):
-        """Provides a method of applying a :class:`.PropComparator`
-        to any Python descriptor attribute.
-
-
-        Allows any Python descriptor to behave like a SQL-enabled
-        attribute when used at the class level in queries, allowing
-        redefinition of expression operator behavior.
-
-        In the example below we redefine :meth:`.PropComparator.operate`
-        to wrap both sides of an expression in ``func.lower()`` to produce
-        case-insensitive comparison::
-
-            from sqlalchemy.orm import comparable_property
-            from sqlalchemy.orm.interfaces import PropComparator
-            from sqlalchemy.sql import func
-            from sqlalchemy import Integer, String, Column
-            from sqlalchemy.ext.declarative import declarative_base
-
-            class CaseInsensitiveComparator(PropComparator):
-                def __clause_element__(self):
-                    return self.prop
-
-                def operate(self, op, other):
-                    return op(
-                        func.lower(self.__clause_element__()),
-                        func.lower(other)
-                    )
-
-            Base = declarative_base()
-
-            class SearchWord(Base):
-                __tablename__ = 'search_word'
-                id = Column(Integer, primary_key=True)
-                word = Column(String)
-                word_insensitive = comparable_property(lambda prop, mapper:
-                                CaseInsensitiveComparator(
-                                    mapper.c.word, mapper)
-                            )
-
-
-        A mapping like the above allows the ``word_insensitive`` attribute
-        to render an expression like::
-
-            >>> print(SearchWord.word_insensitive == "Trucks")
-            lower(search_word.word) = lower(:lower_1)
-
-        :param comparator_factory:
-          A PropComparator subclass or factory that defines operator behavior
-          for this property.
-
-        :param descriptor:
-          Optional when used in a ``properties={}`` declaration.  The Python
-          descriptor or property to layer comparison behavior on top of.
-
-          The like-named descriptor will be automatically retrieved from the
-          mapped class if left blank in a ``properties`` declaration.
-
-        :param info: Optional data dictionary which will be populated into the
-            :attr:`.InspectionAttr.info` attribute of this object.
-
-            .. versionadded:: 1.0.0
-
-        """
-        super(ComparableProperty, self).__init__()
-        self.descriptor = descriptor
-        self.comparator_factory = comparator_factory
-        self.doc = doc or (descriptor and descriptor.__doc__) or None
-        if info:
-            self.info = info
-        util.set_creation_order(self)
-
-    def _comparator_factory(self, mapper):
-        return self.comparator_factory(self, mapper)

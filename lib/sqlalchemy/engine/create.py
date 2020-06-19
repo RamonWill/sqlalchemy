@@ -19,7 +19,7 @@ from ..sql import compiler
 @util.deprecated_params(
     strategy=(
         "1.4",
-        "The :paramref:`.create_engine.strategy` keyword is deprecated, "
+        "The :paramref:`_sa.create_engine.strategy` keyword is deprecated, "
         "and the only argument accepted is 'mock'; please use "
         ":func:`.create_mock_engine` going forward.  For general "
         "customization of create_engine which may have been accomplished "
@@ -27,7 +27,7 @@ from ..sql import compiler
     ),
     empty_in_strategy=(
         "1.4",
-        "The :paramref:`.create_engine.empty_in_strategy` keyword is "
+        "The :paramref:`_sa.create_engine.empty_in_strategy` keyword is "
         "deprecated, and no longer has any effect.  All IN expressions "
         "are now rendered using "
         'the "expanding parameter" strategy which renders a set of bound'
@@ -36,14 +36,14 @@ from ..sql import compiler
     ),
     case_sensitive=(
         "1.4",
-        "The :paramref:`.create_engine.case_sensitive` parameter "
+        "The :paramref:`_sa.create_engine.case_sensitive` parameter "
         "is deprecated and will be removed in a future release. "
         "Applications should work with result column names in a case "
         "sensitive fashion.",
     ),
 )
 def create_engine(url, **kwargs):
-    """Create a new :class:`.Engine` instance.
+    """Create a new :class:`_engine.Engine` instance.
 
     The standard calling form is to send the URL as the
     first positional argument, usually a string
@@ -53,8 +53,8 @@ def create_engine(url, **kwargs):
         engine = create_engine("postgresql://scott:tiger@localhost/test")
 
     Additional keyword arguments may then follow it which
-    establish various options on the resulting :class:`.Engine`
-    and its underlying :class:`.Dialect` and :class:`.Pool`
+    establish various options on the resulting :class:`_engine.Engine`
+    and its underlying :class:`.Dialect` and :class:`_pool.Pool`
     constructs::
 
         engine = create_engine("mysql://scott:tiger@hostname/dbname",
@@ -69,17 +69,19 @@ def create_engine(url, **kwargs):
 
     ``**kwargs`` takes a wide variety of options which are routed
     towards their appropriate components.  Arguments may be specific to
-    the :class:`.Engine`, the underlying :class:`.Dialect`, as well as the
-    :class:`.Pool`.  Specific dialects also accept keyword arguments that
+    the :class:`_engine.Engine`, the underlying :class:`.Dialect`,
+    as well as the
+    :class:`_pool.Pool`.  Specific dialects also accept keyword arguments that
     are unique to that dialect.   Here, we describe the parameters
-    that are common to most :func:`.create_engine()` usage.
+    that are common to most :func:`_sa.create_engine()` usage.
 
-    Once established, the newly resulting :class:`.Engine` will
-    request a connection from the underlying :class:`.Pool` once
-    :meth:`.Engine.connect` is called, or a method which depends on it
-    such as :meth:`.Engine.execute` is invoked.   The :class:`.Pool` in turn
+    Once established, the newly resulting :class:`_engine.Engine` will
+    request a connection from the underlying :class:`_pool.Pool` once
+    :meth:`_engine.Engine.connect` is called, or a method which depends on it
+    such as :meth:`_engine.Engine.execute` is invoked.   The
+    :class:`_pool.Pool` in turn
     will establish the first actual DBAPI connection when this request
-    is received.   The :func:`.create_engine` call itself does **not**
+    is received.   The :func:`_sa.create_engine` call itself does **not**
     establish any actual DBAPI connections directly.
 
     .. seealso::
@@ -109,7 +111,7 @@ def create_engine(url, **kwargs):
 
         .. deprecated:: 1.3
 
-            The :paramref:`.create_engine.convert_unicode` parameter
+            The :paramref:`_sa.create_engine.convert_unicode` parameter
             is deprecated and will be removed in a future release.
             All modern DBAPIs now support Python Unicode directly and this
             parameter is unnecessary.
@@ -119,6 +121,18 @@ def create_engine(url, **kwargs):
         connection pool and will be used to create all new database
         connections. Usage of this function causes connection
         parameters specified in the URL argument to be bypassed.
+
+        This hook is not as flexible as the newer
+        :class:`_events.DialectEvents.do_connect` hook which allows complete
+        control over how a connection is made to the database, given the full
+        set of URL arguments and state beforehand.
+
+        .. seealso::
+
+            :class:`_events.DialectEvents.do_connect` - event hook that allows
+            full control over DBAPI connection mechanics.
+
+            :ref:`custom_dbapi_args`
 
     :param echo=False: if True, the Engine will log all statements
         as well as a ``repr()`` of their parameter lists to the default log
@@ -163,25 +177,30 @@ def create_engine(url, **kwargs):
     :param encoding: Defaults to ``utf-8``.  This is the string
         encoding used by SQLAlchemy for string encode/decode
         operations which occur within SQLAlchemy, **outside of
-        the DBAPI.**  Most modern DBAPIs feature some degree of
-        direct support for Python ``unicode`` objects,
-        what you see in Python 2 as a string of the form
-        ``u'some string'``.  For those scenarios where the
-        DBAPI is detected as not supporting a Python ``unicode``
-        object, this encoding is used to determine the
-        source/destination encoding.  It is **not used**
-        for those cases where the DBAPI handles unicode
-        directly.
+        the DBAPIs own encoding facilities.**
 
-        To properly configure a system to accommodate Python
-        ``unicode`` objects, the DBAPI should be
-        configured to handle unicode to the greatest
-        degree as is appropriate - see
-        the notes on unicode pertaining to the specific
-        target database in use at :ref:`dialect_toplevel`.
+        .. note:: The ``encoding`` parameter deals only with in-Python
+           encoding issues that were prevalent with many DBAPIs under  Python
+           2.  Under Python 3 it is mostly unused.   For  DBAPIs that require
+           client encoding configurations, such as those of MySQL and Oracle,
+           please consult specific :ref:`dialect documentation
+           <dialect_toplevel>` for details.
+
+        All modern DBAPIs that work in Python 3 necessarily feature direct
+        support for Python unicode strings.   Under Python 2, this was not
+        always the case.  For those scenarios where the DBAPI is detected as
+        not supporting a Python ``unicode`` object under Python 2, this
+        encoding is used to determine the source/destination encoding.  It is
+        **not used** for those cases where the DBAPI handles unicode directly.
+
+        To properly configure a system to accommodate Python ``unicode``
+        objects, the DBAPI should be configured to handle unicode to the
+        greatest degree as is appropriate - see the notes on unicode pertaining
+        to the specific target database in use at :ref:`dialect_toplevel`.
 
         Areas where string encoding may need to be accommodated
-        outside of the DBAPI include zero or more of:
+        outside of the DBAPI, nearly always under **Python 2 only**,
+        include zero or more of:
 
         * the values passed to bound parameters, corresponding to
           the :class:`.Unicode` type or the :class:`.String` type
@@ -197,13 +216,12 @@ def create_engine(url, **kwargs):
         * the string column names retrieved from the DBAPI's
           ``cursor.description`` attribute.
 
-        When using Python 3, the DBAPI is required to support
-        *all* of the above values as Python ``unicode`` objects,
-        which in Python 3 are just known as ``str``.  In Python 2,
-        the DBAPI does not specify unicode behavior at all,
-        so SQLAlchemy must make decisions for each of the above
-        values on a per-DBAPI basis - implementations are
-        completely inconsistent in their behavior.
+        When using Python 3, the DBAPI is required to support all of the above
+        values as Python ``unicode`` objects, which in Python 3 are just known
+        as ``str``.  In Python 2, the DBAPI does not specify unicode behavior
+        at all, so SQLAlchemy must make decisions for each of the above values
+        on a per-DBAPI basis - implementations are completely inconsistent in
+        their behavior.
 
     :param execution_options: Dictionary execution options which will
         be applied to all connections.  See
@@ -233,16 +251,17 @@ def create_engine(url, **kwargs):
         individual dialects should be consulted directly.
 
         Note that the isolation level can also be set on a
-        per-:class:`.Connection` basis as well, using the
+        per-:class:`_engine.Connection` basis as well, using the
         :paramref:`.Connection.execution_options.isolation_level`
         feature.
 
         .. seealso::
 
-            :attr:`.Connection.default_isolation_level` - view default level
+            :attr:`_engine.Connection.default_isolation_level`
+            - view default level
 
             :paramref:`.Connection.execution_options.isolation_level`
-            - set per :class:`.Connection` isolation level
+            - set per :class:`_engine.Connection` isolation level
 
             :ref:`SQLite Transaction Isolation <sqlite_isolation_level>`
 
@@ -252,7 +271,8 @@ def create_engine(url, **kwargs):
 
             :ref:`session_transaction_isolation` - for the ORM
 
-    :param json_deserializer: for dialects that support the :class:`.JSON`
+    :param json_deserializer: for dialects that support the
+        :class:`_types.JSON`
         datatype, this is a Python callable that will convert a JSON string
         to a Python object.  By default, the Python ``json.loads`` function is
         used.
@@ -260,7 +280,7 @@ def create_engine(url, **kwargs):
         .. versionchanged:: 1.3.7  The SQLite dialect renamed this from
            ``_json_deserializer``.
 
-    :param json_serializer: for dialects that support the :class:`.JSON`
+    :param json_serializer: for dialects that support the :class:`_types.JSON`
         datatype, this is a Python callable that will render a given object
         as JSON.   By default, the Python ``json.dumps`` function is used.
 
@@ -273,14 +293,15 @@ def create_engine(url, **kwargs):
         characters. If less than 6, labels are generated as
         "_(counter)". If ``None``, the value of
         ``dialect.max_identifier_length``, which may be affected via the
-        :paramref:`.create_engine.max_identifier_length` parameter,
-        is used instead.   The value of :paramref:`.create_engine.label_length`
+        :paramref:`_sa.create_engine.max_identifier_length` parameter,
+        is used instead.   The value of
+        :paramref:`_sa.create_engine.label_length`
         may not be larger than that of
-        :paramref:`.create_engine.max_identfier_length`.
+        :paramref:`_sa.create_engine.max_identfier_length`.
 
         .. seealso::
 
-            :paramref:`.create_engine.max_identifier_length`
+            :paramref:`_sa.create_engine.max_identifier_length`
 
     :param listeners: A list of one or more
         :class:`~sqlalchemy.interfaces.PoolListener` objects which will
@@ -304,7 +325,7 @@ def create_engine(url, **kwargs):
 
         .. seealso::
 
-            :paramref:`.create_engine.label_length`
+            :paramref:`_sa.create_engine.label_length`
 
     :param max_overflow=10: the number of connections to allow in
         connection pool "overflow", that is connections that can be
@@ -317,7 +338,7 @@ def create_engine(url, **kwargs):
         specific DBAPI which will be imported before first connect.  This
         parameter causes the import to be bypassed, and the given module to
         be used instead. Can be used for testing of DBAPIs as well as to
-        inject "mock" DBAPI implementations into the :class:`.Engine`.
+        inject "mock" DBAPI implementations into the :class:`_engine.Engine`.
 
     :param paramstyle=None: The `paramstyle <http://legacy.python.org/dev/peps/pep-0249/#paramstyle>`_
         to use when rendering bound parameters.  This style defaults to the
@@ -382,13 +403,13 @@ def create_engine(url, **kwargs):
             :ref:`pool_setting_recycle`
 
     :param pool_reset_on_return='rollback': set the
-        :paramref:`.Pool.reset_on_return` parameter of the underlying
-        :class:`.Pool` object, which can be set to the values
+        :paramref:`_pool.Pool.reset_on_return` parameter of the underlying
+        :class:`_pool.Pool` object, which can be set to the values
         ``"rollback"``, ``"commit"``, or ``None``.
 
         .. seealso::
 
-            :paramref:`.Pool.reset_on_return`
+            :paramref:`_pool.Pool.reset_on_return`
 
     :param pool_timeout=30: number of seconds to wait before giving
         up on getting a connection from the pool. This is only used
@@ -414,6 +435,34 @@ def create_engine(url, **kwargs):
 
         .. versionadded:: 1.2.3
 
+    :param query_cache_size: size of the cache used to cache the SQL string
+     form of queries.  Set to zero to disable caching.
+
+     The cache is pruned of its least recently used items when its size reaches
+     N * 1.5.  Defaults to 500, meaning the cache will always store at least
+     500 SQL statements when filled, and will grow up to 750 items at which
+     point it is pruned back down to 500 by removing the 250 least recently
+     used items.
+
+     Caching is accomplished on a per-statement basis by generating a
+     cache key that represents the statement's structure, then generating
+     string SQL for the current dialect only if that key is not present
+     in the cache.   All statements support caching, however some features
+     such as an INSERT with a large set of parameters will intentionally
+     bypass the cache.   SQL logging will indicate statistics for each
+     statement whether or not it were pull from the cache.
+
+     .. note:: some ORM functions related to unit-of-work persistence as well
+        as some attribute loading strategies will make use of individual
+        per-mapper caches outside of the main cache.
+
+
+     .. seealso::
+
+        ``engine_caching`` - TODO: this will be an upcoming section describing
+        the SQL caching system.
+
+     .. versionadded:: 1.4
 
     """  # noqa
 
@@ -527,7 +576,8 @@ def create_engine(url, **kwargs):
         pool._dialect = dialect
 
     # create engine.
-    engineclass = base.Engine
+    engineclass = kwargs.pop("_future_engine_class", base.Engine)
+
     engine_args = {}
     for k in util.get_cls_kwargs(engineclass):
         if k in kwargs:
@@ -598,7 +648,7 @@ def engine_from_config(configuration, prefix="sqlalchemy.", **kwargs):
     ``sqlalchemy.url``, ``sqlalchemy.echo``, etc.  The 'prefix' argument
     indicates the prefix to be searched for.  Each matching key (after the
     prefix is stripped) is treated as though it were the corresponding keyword
-    argument to a :func:`.create_engine` call.
+    argument to a :func:`_sa.create_engine` call.
 
     The only required key is (assuming the default prefix) ``sqlalchemy.url``,
     which provides the :ref:`database URL <database_urls>`.
@@ -610,7 +660,7 @@ def engine_from_config(configuration, prefix="sqlalchemy.", **kwargs):
     :param configuration: A dictionary (typically produced from a config file,
         but this is not a requirement).  Items whose keys start with the value
         of 'prefix' will have that prefix stripped, and will then be passed to
-        :ref:`create_engine`.
+        :func:`_sa.create_engine`.
 
     :param prefix: Prefix to match and then strip from keys
         in 'configuration'.

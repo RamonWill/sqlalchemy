@@ -20,7 +20,7 @@ Query Profiling
 ^^^^^^^^^^^^^^^
 
 Sometimes just plain SQL logging (enabled via python's logging module
-or via the ``echo=True`` argument on :func:`.create_engine`) can give an
+or via the ``echo=True`` argument on :func:`_sa.create_engine`) can give an
 idea how long things are taking.  For example, if you log something
 right after a SQL operation, you'd see something like this in your
 log::
@@ -36,7 +36,7 @@ Logging SQL will also illustrate if dozens/hundreds of queries are
 being issued which could be better organized into much fewer queries.
 When using the SQLAlchemy ORM, the "eager loading"
 feature is provided to partially (:func:`.contains_eager()`) or fully
-(:func:`.joinedload()`, :func:`.subqueryload()`)
+(:func:`_orm.joinedload()`, :func:`.subqueryload()`)
 automate this activity, but without
 the ORM "eager loading" typically means to use joins so that results across multiple
 tables can be loaded in one result set instead of multiplying numbers
@@ -68,8 +68,8 @@ using a recipe like the following::
         logger.debug("Query Complete!")
         logger.debug("Total Time: %f", total)
 
-Above, we use the :meth:`.ConnectionEvents.before_cursor_execute` and
-:meth:`.ConnectionEvents.after_cursor_execute` events to establish an interception
+Above, we use the :meth:`_events.ConnectionEvents.before_cursor_execute` and
+:meth:`_events.ConnectionEvents.after_cursor_execute` events to establish an interception
 point around when a statement is executed.  We attach a timer onto the
 connection using the :class:`._ConnectionRecord.info` dictionary; we use a
 stack here for the occasional case where the cursor execute events may be nested.
@@ -160,7 +160,7 @@ If on the other hand you see many thousands of calls related to fetching rows,
 or very long calls to ``fetchall()``, it may
 mean your query is returning more rows than expected, or that the fetching
 of rows itself is slow.   The ORM itself typically uses ``fetchall()`` to fetch
-rows (or ``fetchmany()`` if the :meth:`.Query.yield_per` option is used).
+rows (or ``fetchmany()`` if the :meth:`_query.Query.yield_per` option is used).
 
 An inordinately large number of rows would be indicated
 by a very slow call to ``fetchall()`` at the DBAPI level::
@@ -171,11 +171,11 @@ An unexpectedly large number of rows, even if the ultimate result doesn't seem
 to have many rows, can be the result of a cartesian product - when multiple
 sets of rows are combined together without appropriately joining the tables
 together.   It's often easy to produce this behavior with SQLAlchemy Core or
-ORM query if the wrong :class:`.Column` objects are used in a complex query,
+ORM query if the wrong :class:`_schema.Column` objects are used in a complex query,
 pulling in additional FROM clauses that are unexpected.
 
 On the other hand, a fast call to ``fetchall()`` at the DBAPI level, but then
-slowness when SQLAlchemy's :class:`.ResultProxy` is asked to do a ``fetchall()``,
+slowness when SQLAlchemy's :class:`_engine.CursorResult` is asked to do a ``fetchall()``,
 may indicate slowness in processing of datatypes, such as unicode conversions
 and similar::
 
@@ -212,7 +212,7 @@ the profiling output of this intentionally slow operation can be seen like this:
 that is, we see many expensive calls within the ``type_api`` system, and the actual
 time consuming thing is the ``time.sleep()`` call.
 
-Make sure to check the :doc:`Dialect documentation <dialects/index>`
+Make sure to check the :ref:`Dialect documentation <dialect_toplevel>`
 for notes on known performance tuning suggestions at this level, especially for
 databases like Oracle.  There may be systems related to ensuring numeric accuracy
 or string processing that may not be needed in all cases.
@@ -295,14 +295,14 @@ ORM as a first-class component.
 
 For the use case of fast bulk inserts, the
 SQL generation and execution system that the ORM builds on top of
-is part of the :doc:`Core <core/tutorial>`.  Using this system directly, we can produce an INSERT that
+is part of the :ref:`Core <sqlexpression_toplevel>`.  Using this system directly, we can produce an INSERT that
 is competitive with using the raw database API directly.
 
 .. note::
 
-    When using the psycopg2 dialect, consider making use of the
-    :ref:`batch execution helpers <psycopg2_batch_mode>` feature of psycopg2,
-    now supported directly by the SQLAlchemy psycopg2 dialect.
+    When using the psycopg2 dialect, consider making use of the :ref:`batch
+    execution helpers <psycopg2_executemany_mode>` feature of psycopg2, now
+    supported directly by the SQLAlchemy psycopg2 dialect.
 
 Alternatively, the SQLAlchemy ORM offers the :ref:`bulk_operations`
 suite of methods, which provide hooks into subsections of the unit of

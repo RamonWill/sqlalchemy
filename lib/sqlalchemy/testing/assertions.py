@@ -146,8 +146,8 @@ def _expect_warnings(
 
     def our_warn(msg, *arg, **kw):
         if isinstance(msg, exc_cls):
-            exception = msg
-            msg = str(exception)
+            exception = type(msg)
+            msg = str(msg)
         elif arg:
             exception = arg[0]
         else:
@@ -168,7 +168,9 @@ def _expect_warnings(
         else:
             real_warn(msg, *arg, **kw)
 
-    with mock.patch("warnings.warn", our_warn):
+    with mock.patch("warnings.warn", our_warn), mock.patch(
+        "sqlalchemy.util.SQLALCHEMY_WARN_20", True
+    ), mock.patch("sqlalchemy.engine.row.LegacyRow._default_key_style", 2):
         yield
 
     if assert_ and (not py2konly or not compat.py3k):
@@ -285,13 +287,11 @@ def _assert_proper_exception_context(exception):
 
 
 def assert_raises(except_cls, callable_, *args, **kw):
-    _assert_raises(except_cls, callable_, args, kw, check_context=True)
+    return _assert_raises(except_cls, callable_, args, kw, check_context=True)
 
 
 def assert_raises_context_ok(except_cls, callable_, *args, **kw):
-    _assert_raises(
-        except_cls, callable_, args, kw,
-    )
+    return _assert_raises(except_cls, callable_, args, kw,)
 
 
 def assert_raises_return(except_cls, callable_, *args, **kw):
@@ -299,7 +299,7 @@ def assert_raises_return(except_cls, callable_, *args, **kw):
 
 
 def assert_raises_message(except_cls, msg, callable_, *args, **kwargs):
-    _assert_raises(
+    return _assert_raises(
         except_cls, callable_, args, kwargs, msg=msg, check_context=True
     )
 
@@ -307,7 +307,7 @@ def assert_raises_message(except_cls, msg, callable_, *args, **kwargs):
 def assert_raises_message_context_ok(
     except_cls, msg, callable_, *args, **kwargs
 ):
-    _assert_raises(except_cls, callable_, args, kwargs, msg=msg)
+    return _assert_raises(except_cls, callable_, args, kwargs, msg=msg)
 
 
 def _assert_raises(
@@ -398,13 +398,11 @@ class AssertsCompiledSQL(object):
         from sqlalchemy import orm
 
         if isinstance(clause, orm.Query):
-            context = clause._compile_context()
-            context.statement._label_style = LABEL_STYLE_TABLENAME_PLUS_COL
-            clause = context.statement
-        elif isinstance(clause, orm.persistence.BulkUD):
-            with mock.patch.object(clause, "_execute_stmt") as stmt_mock:
-                clause.exec_()
-                clause = stmt_mock.mock_calls[0][1][0]
+            compile_state = clause._compile_state()
+            compile_state.statement._label_style = (
+                LABEL_STYLE_TABLENAME_PLUS_COL
+            )
+            clause = compile_state.statement
 
         if compile_kwargs:
             kw["compile_kwargs"] = compile_kwargs
@@ -412,7 +410,6 @@ class AssertsCompiledSQL(object):
         c = clause.compile(dialect=dialect, **kw)
 
         param_str = repr(getattr(c, "params", {}))
-
         if util.py3k:
             param_str = param_str.encode("utf-8").decode("ascii", "ignore")
             print(

@@ -223,7 +223,7 @@ def %(name)s(%(args)s):
             "Inherited from :func:`sqlalchemy%s`; this constructor "
             "creates a :class:`%s` object"
             % (linked_to_location, class_location),
-            0,
+            1,
         )
         decorated.__doc__ = linked_to_doc
     else:
@@ -930,6 +930,8 @@ class HasMemoized(object):
 
     """
 
+    __slots__ = ()
+
     _memoized_keys = frozenset()
 
     def _reset_memoizations(self):
@@ -939,6 +941,10 @@ class HasMemoized(object):
     def _assert_no_memoizations(self):
         for elem in self._memoized_keys:
             assert elem not in self.__dict__
+
+    def _set_memoized_attribute(self, key, value):
+        self.__dict__[key] = value
+        self._memoized_keys |= {key}
 
     class memoized_attribute(object):
         """A read-only @property that is only evaluated once."""
@@ -1258,14 +1264,19 @@ class classproperty(property):
 class hybridproperty(object):
     def __init__(self, func):
         self.func = func
+        self.clslevel = func
 
     def __get__(self, instance, owner):
         if instance is None:
-            clsval = self.func(owner)
+            clsval = self.clslevel(owner)
             clsval.__doc__ = self.func.__doc__
             return clsval
         else:
             return self.func(instance)
+
+    def classlevel(self, func):
+        self.clslevel = func
+        return self
 
 
 class hybridmethod(object):
@@ -1273,12 +1284,17 @@ class hybridmethod(object):
 
     def __init__(self, func):
         self.func = func
+        self.clslevel = func
 
     def __get__(self, instance, owner):
         if instance is None:
-            return self.func.__get__(owner, owner.__class__)
+            return self.clslevel.__get__(owner, owner.__class__)
         else:
             return self.func.__get__(instance, owner)
+
+    def classlevel(self, func):
+        self.clslevel = func
+        return self
 
 
 class _symbol(int):
@@ -1637,6 +1653,8 @@ def _dedent_docstring(text):
 def inject_docstring_text(doctext, injecttext, pos):
     doctext = _dedent_docstring(doctext or "")
     lines = doctext.split("\n")
+    if len(lines) == 1:
+        lines.append("")
     injectlines = textwrap.dedent(injecttext).split("\n")
     if injectlines[0]:
         injectlines.insert(0, "")

@@ -1,4 +1,5 @@
 # -*- encoding: utf-8
+
 from sqlalchemy import Column
 from sqlalchemy import engine_from_config
 from sqlalchemy import event
@@ -7,11 +8,12 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
-from sqlalchemy.dialects.mssql import adodbapi
 from sqlalchemy.dialects.mssql import base
 from sqlalchemy.dialects.mssql import pymssql
 from sqlalchemy.dialects.mssql import pyodbc
 from sqlalchemy.engine import url
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import assert_warnings
 from sqlalchemy.testing import engines
@@ -66,6 +68,13 @@ class ParseConnectTest(fixtures.TestBase):
             ],
             connection,
         )
+
+    def test_pyodbc_empty_url_no_warning(self):
+        dialect = pyodbc.dialect()
+        u = url.make_url("mssql+pyodbc://")
+
+        # no warning is emitted
+        dialect.create_connect_args(u)
 
     def test_pyodbc_host_no_driver(self):
         dialect = pyodbc.dialect()
@@ -201,7 +210,7 @@ class ParseConnectTest(fixtures.TestBase):
 
     def test_pyodbc_token_injection(self):
         token1 = "someuser%3BPORT%3D50001"
-        token2 = "somepw%3BPORT%3D50001"
+        token2 = "some{strange}pw%3BPORT%3D50001"
         token3 = "somehost%3BPORT%3D50001"
         token4 = "somedb%3BPORT%3D50001"
 
@@ -215,34 +224,8 @@ class ParseConnectTest(fixtures.TestBase):
             [
                 [
                     "DRIVER={foob};Server=somehost%3BPORT%3D50001;"
-                    "Database=somedb%3BPORT%3D50001;UID='someuser;PORT=50001';"
-                    "PWD='somepw;PORT=50001'"
-                ],
-                {},
-            ],
-            connection,
-        )
-
-    def test_adodbapi_token_injection(self):
-        token1 = "someuser%3BPORT%3D50001"
-        token2 = "somepw%3BPORT%3D50001"
-        token3 = "somehost%3BPORT%3D50001"
-        token4 = "someport%3BPORT%3D50001"
-
-        # this URL format is all wrong
-        u = url.make_url(
-            "mssql+adodbapi://@/?user=%s&password=%s&host=%s&port=%s"
-            % (token1, token2, token3, token4)
-        )
-        dialect = adodbapi.dialect()
-        connection = dialect.create_connect_args(u)
-        eq_(
-            [
-                [
-                    "Provider=SQLOLEDB;"
-                    "Data Source='somehost;PORT=50001', 'someport;PORT=50001';"
-                    "Initial Catalog=None;User Id='someuser;PORT=50001';"
-                    "Password='somepw;PORT=50001'"
+                    "Database=somedb%3BPORT%3D50001;UID={someuser;PORT=50001};"
+                    "PWD={some{strange}}pw;PORT=50001}"
                 ],
                 {},
             ],
@@ -314,7 +297,7 @@ class ParseConnectTest(fixtures.TestBase):
         )
 
         for error in [
-            MockDBAPIError("[%s] some pyodbc message" % code)
+            MockDBAPIError(code, "[%s] some pyodbc message" % code)
             for code in [
                 "08S01",
                 "01002",
@@ -336,7 +319,9 @@ class ParseConnectTest(fixtures.TestBase):
 
         eq_(
             dialect.is_disconnect(
-                MockProgrammingError("not an error"), None, None
+                MockProgrammingError("Query with abc08007def failed"),
+                None,
+                None,
             ),
             False,
         )
@@ -531,3 +516,39 @@ class IsolationLevelDetectTest(fixtures.TestBase):
                 dialect.get_isolation_level,
                 connection,
             )
+
+
+class InvalidTransactionFalsePositiveTest(fixtures.TablesTest):
+    __only_on__ = "mssql"
+    __backend__ = True
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "error_t",
+            metadata,
+            Column("error_code", String(50), primary_key=True),
+        )
+
+    @classmethod
+    def insert_data(cls, connection):
+        connection.execute(
+            cls.tables.error_t.insert(), [{"error_code": "01002"}],
+        )
+
+    def test_invalid_transaction_detection(self, connection):
+        # issue #5359
+        t = self.tables.error_t
+
+        # force duplicate PK error
+        assert_raises(
+            IntegrityError,
+            connection.execute,
+            t.insert(),
+            {"error_code": "01002"},
+        )
+
+        # this should not fail with
+        # "Can't reconnect until invalid transaction is rolled back."
+        result = connection.execute(t.select()).fetchall()
+        eq_(len(result), 1)

@@ -2,10 +2,10 @@ Insert, Updates, Deletes
 ========================
 
 INSERT, UPDATE and DELETE statements build on a hierarchy starting
-with :class:`.UpdateBase`.   The :class:`~.sql.expression.Insert` and :class:`.Update`
+with :class:`.UpdateBase`.   The :class:`_expression.Insert` and :class:`_expression.Update`
 constructs build on the intermediary :class:`.ValuesBase`.
 
-.. module:: sqlalchemy.sql.expression
+.. currentmodule:: sqlalchemy.sql.expression
 
 .. autofunction:: delete
 
@@ -16,19 +16,29 @@ constructs build on the intermediary :class:`.ValuesBase`.
 
 .. autoclass:: Delete
    :members:
-   :inherited-members:
+
+   .. automethod:: Delete.where
+
+   .. automethod:: Delete.returning
 
 .. autoclass:: Insert
    :members:
-   :inherited-members:
+
+   .. automethod:: Insert.values
+
+   .. automethod:: Insert.returning
 
 .. autoclass:: Update
-  :members:
-  :inherited-members:
+   :members:
+
+   .. automethod:: Update.returning
+
+   .. automethod:: Update.where
+
+   .. automethod:: Update.values
 
 .. autoclass:: sqlalchemy.sql.expression.UpdateBase
-  :members:
-  :inherited-members:
+   :members:
 
 .. autoclass:: sqlalchemy.sql.expression.ValuesBase
    :members:

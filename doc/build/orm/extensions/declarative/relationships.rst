@@ -44,13 +44,21 @@ class using them::
         user_id = Column(Integer, ForeignKey('users.id'))
         user = relationship(User, primaryjoin=user_id == User.id)
 
+.. _declarative_relationship_eval:
+
+Evaluation of relationship arguments
+=====================================
+
 In addition to the main argument for :func:`~sqlalchemy.orm.relationship`,
 other arguments which depend upon the columns present on an as-yet
-undefined class may also be specified as strings.  These strings are
-evaluated as Python expressions.  The full namespace available within
-this evaluation includes all classes mapped for this declarative base,
-as well as the contents of the ``sqlalchemy`` package, including
-expression functions like :func:`~sqlalchemy.sql.expression.desc` and
+undefined class may also be specified as strings.   For most of these
+arguments except that of the main argument, these strings are
+**evaluated as Python expressions using Python's built-in eval() function.**
+
+The full namespace available within this evaluation includes all classes mapped
+for this declarative base, as well as the contents of the ``sqlalchemy``
+package, including expression functions like
+:func:`~sqlalchemy.sql.expression.desc` and
 :attr:`~sqlalchemy.sql.expression.func`::
 
     class User(Base):
@@ -58,6 +66,37 @@ expression functions like :func:`~sqlalchemy.sql.expression.desc` and
         addresses = relationship("Address",
                              order_by="desc(Address.email)",
                              primaryjoin="Address.user_id==User.id")
+
+.. warning::
+
+    The strings accepted by the following parameters:
+
+        :paramref:`_orm.relationship.order_by`
+
+        :paramref:`_orm.relationship.primaryjoin`
+
+        :paramref:`_orm.relationship.secondaryjoin`
+
+        :paramref:`_orm.relationship.secondary`
+
+        :paramref:`_orm.relationship.remote_side`
+
+        :paramref:`_orm.relationship.foreign_keys`
+
+        :paramref:`_orm.relationship._user_defined_foreign_keys`
+
+    Are **evaluated as Python code expressions using eval().  DO NOT PASS
+    UNTRUSTED INPUT TO THESE ARGUMENTS.**
+
+    In addition, prior to version 1.3.16 of SQLAlchemy, the main
+    "argument" to :func:`_orm.relationship` is also evaluated as Python
+    code.  **DO NOT PASS UNTRUSTED INPUT TO THIS ARGUMENT.**
+
+.. versionchanged:: 1.3.16
+
+    The string evaluation of the main "argument" no longer accepts an open
+    ended Python expression, instead only accepting a string class name
+    or dotted package-qualified name.
 
 For the case where more than one module contains a class of the same name,
 string class names can also be specified as module-qualified paths
@@ -108,10 +147,10 @@ Configuring Many-to-Many Relationships
 Many-to-many relationships are also declared in the same way
 with declarative as with traditional mappings. The
 ``secondary`` argument to
-:func:`.relationship` is as usual passed a
-:class:`.Table` object, which is typically declared in the
-traditional way.  The :class:`.Table` usually shares
-the :class:`.MetaData` object used by the declarative base::
+:func:`_orm.relationship` is as usual passed a
+:class:`_schema.Table` object, which is typically declared in the
+traditional way.  The :class:`_schema.Table` usually shares
+the :class:`_schema.MetaData` object used by the declarative base::
 
     keywords = Table(
         'keywords', Base.metadata,
@@ -134,8 +173,8 @@ as well, passing the string name of the table as defined in the
         keywords = relationship("Keyword", secondary="keywords")
 
 As with traditional mapping, its generally not a good idea to use
-a :class:`.Table` as the "secondary" argument which is also mapped to
-a class, unless the :func:`.relationship` is declared with ``viewonly=True``.
+a :class:`_schema.Table` as the "secondary" argument which is also mapped to
+a class, unless the :func:`_orm.relationship` is declared with ``viewonly=True``.
 Otherwise, the unit-of-work system may attempt duplicate INSERT and
 DELETE statements against the underlying table.
 

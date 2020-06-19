@@ -2,12 +2,12 @@ Selectables, Tables, FROM objects
 =================================
 
 The term "selectable" refers to any object that rows can be selected from;
-in SQLAlchemy, these objects descend from :class:`.FromClause` and their
-distinguishing feature is their :attr:`.FromClause.c` attribute, which is
+in SQLAlchemy, these objects descend from :class:`_expression.FromClause` and their
+distinguishing feature is their :attr:`_expression.FromClause.c` attribute, which is
 a namespace of all the columns contained within the FROM clause (these
-elements are themselves :class:`.ColumnElement` subclasses).
+elements are themselves :class:`_expression.ColumnElement` subclasses).
 
-.. module:: sqlalchemy.sql.expression
+.. currentmodule:: sqlalchemy.sql.expression
 
 .. autofunction:: alias
 
@@ -78,13 +78,16 @@ elements are themselves :class:`.ColumnElement` subclasses).
 
 .. autoclass:: Select
    :members:
-   :inherited-members:
+   :inherited-members:  ClauseElement
+   :exclude-members: memoized_attribute, memoized_instancemethod
 
 .. autoclass:: Selectable
    :members:
 
 .. autoclass:: SelectBase
    :members:
+   :inherited-members:  ClauseElement
+   :exclude-members: memoized_attribute, memoized_instancemethod
 
 .. autoclass:: Subquery
    :members:

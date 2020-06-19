@@ -31,29 +31,92 @@ class ImmutableContainer(object):
     __delitem__ = __setitem__ = __setattr__ = _immutable
 
 
-class immutabledict(ImmutableContainer, dict):
+def _immutabledict_py_fallback():
+    class immutabledict(ImmutableContainer, dict):
+
+        clear = (
+            pop
+        ) = popitem = setdefault = update = ImmutableContainer._immutable
+
+        def __new__(cls, *args):
+            new = dict.__new__(cls)
+            dict.__init__(new, *args)
+            return new
+
+        def __init__(self, *args):
+            pass
+
+        def __reduce__(self):
+            return _immutabledict_reconstructor, (dict(self),)
+
+        def union(self, d):
+            if not d:
+                return self
+
+            new = dict.__new__(self.__class__)
+            dict.__init__(new, self)
+            dict.update(new, d)
+            return new
+
+        def merge_with(self, *dicts):
+            new = None
+            for d in dicts:
+                if d:
+                    if new is None:
+                        new = dict.__new__(self.__class__)
+                        dict.__init__(new, self)
+                    dict.update(new, d)
+            if new is None:
+                return self
+
+            return new
+
+        def __repr__(self):
+            return "immutabledict(%s)" % dict.__repr__(self)
+
+    return immutabledict
+
+
+try:
+    from sqlalchemy.cimmutabledict import immutabledict
+
+    collections_abc.Mapping.register(immutabledict)
+
+except ImportError:
+    immutabledict = _immutabledict_py_fallback()
+
+    def _immutabledict_reconstructor(*arg):
+        """do the pickle dance"""
+        return immutabledict(*arg)
+
+
+class FacadeDict(ImmutableContainer, dict):
+    """A dictionary that is not publicly mutable."""
 
     clear = pop = popitem = setdefault = update = ImmutableContainer._immutable
 
     def __new__(cls, *args):
         new = dict.__new__(cls)
-        dict.__init__(new, *args)
         return new
 
-    def __init__(self, *args):
-        pass
+    def copy(self):
+        raise NotImplementedError(
+            "an immutabledict shouldn't need to be copied.  use dict(d) "
+            "if you need a mutable dictionary."
+        )
 
     def __reduce__(self):
-        return immutabledict, (dict(self),)
+        return FacadeDict, (dict(self),)
 
-    def union(self, d):
-        new = dict.__new__(self.__class__)
-        dict.__init__(new, self)
-        dict.update(new, d)
-        return new
+    def _insert_item(self, key, value):
+        """insert an item into the dictionary directly.
+
+
+        """
+        dict.__setitem__(self, key, value)
 
     def __repr__(self):
-        return "immutabledict(%s)" % dict.__repr__(self)
+        return "FacadeDict(%s)" % dict.__repr__(self)
 
 
 class Properties(object):
@@ -363,13 +426,10 @@ class IdentitySet(object):
 
     """
 
-    _working_set = set
-
     def __init__(self, iterable=None):
         self._members = dict()
         if iterable:
-            for o in iterable:
-                self.add(o)
+            self.update(iterable)
 
     def add(self, value):
         self._members[id(value)] = value
@@ -412,7 +472,7 @@ class IdentitySet(object):
             return True
 
     def issubset(self, iterable):
-        other = type(self)(iterable)
+        other = self.__class__(iterable)
 
         if len(self) > len(other):
             return False
@@ -433,7 +493,7 @@ class IdentitySet(object):
         return len(self) < len(other) and self.issubset(other)
 
     def issuperset(self, iterable):
-        other = type(self)(iterable)
+        other = self.__class__(iterable)
 
         if len(self) < len(other):
             return False
@@ -455,11 +515,10 @@ class IdentitySet(object):
         return len(self) > len(other) and self.issuperset(other)
 
     def union(self, iterable):
-        result = type(self)()
-        # testlib.pragma exempt:__hash__
-        members = self._member_id_tuples()
-        other = _iter_id(iterable)
-        result._members.update(self._working_set(members).union(other))
+        result = self.__class__()
+        members = self._members
+        result._members.update(members)
+        result._members.update((id(obj), obj) for obj in iterable)
         return result
 
     def __or__(self, other):
@@ -468,7 +527,7 @@ class IdentitySet(object):
         return self.union(other)
 
     def update(self, iterable):
-        self._members = self.union(iterable)._members
+        self._members.update((id(obj), obj) for obj in iterable)
 
     def __ior__(self, other):
         if not isinstance(other, IdentitySet):
@@ -477,11 +536,12 @@ class IdentitySet(object):
         return self
 
     def difference(self, iterable):
-        result = type(self)()
-        # testlib.pragma exempt:__hash__
-        members = self._member_id_tuples()
-        other = _iter_id(iterable)
-        result._members.update(self._working_set(members).difference(other))
+        result = self.__class__()
+        members = self._members
+        other = {id(obj) for obj in iterable}
+        result._members.update(
+            ((k, v) for k, v in members.items() if k not in other)
+        )
         return result
 
     def __sub__(self, other):
@@ -499,11 +559,12 @@ class IdentitySet(object):
         return self
 
     def intersection(self, iterable):
-        result = type(self)()
-        # testlib.pragma exempt:__hash__
-        members = self._member_id_tuples()
-        other = _iter_id(iterable)
-        result._members.update(self._working_set(members).intersection(other))
+        result = self.__class__()
+        members = self._members
+        other = {id(obj) for obj in iterable}
+        result._members.update(
+            (k, v) for k, v in members.items() if k in other
+        )
         return result
 
     def __and__(self, other):
@@ -521,17 +582,16 @@ class IdentitySet(object):
         return self
 
     def symmetric_difference(self, iterable):
-        result = type(self)()
-        # testlib.pragma exempt:__hash__
-        members = self._member_id_tuples()
-        other = _iter_id(iterable)
+        result = self.__class__()
+        members = self._members
+        other = {id(obj): obj for obj in iterable}
         result._members.update(
-            self._working_set(members).symmetric_difference(other)
+            ((k, v) for k, v in members.items() if k not in other)
+        )
+        result._members.update(
+            ((k, v) for k, v in other.items() if k not in members)
         )
         return result
-
-    def _member_id_tuples(self):
-        return ((id(v), v) for v in self._members.values())
 
     def __xor__(self, other):
         if not isinstance(other, IdentitySet):
@@ -600,13 +660,6 @@ class WeakSequence(object):
 
 
 class OrderedIdentitySet(IdentitySet):
-    class _working_set(OrderedSet):
-        # a testing pragma: exempt the OIDS working set from the test suite's
-        # "never call the user's __hash__" assertions.  this is a big hammer,
-        # but it's safe here: IDS operates on (id, instance) tuples in the
-        # working set.
-        __sa_hash_exempt__ = True
-
     def __init__(self, iterable=None):
         IdentitySet.__init__(self)
         self._members = OrderedDict()
@@ -940,13 +993,6 @@ class ThreadLocalRegistry(ScopedRegistry):
             del self.registry.value
         except AttributeError:
             pass
-
-
-def _iter_id(iterable):
-    """Generator: ((id(o), o) for o in iterable)."""
-
-    for item in iterable:
-        yield id(item), item
 
 
 def has_dupes(sequence, target):

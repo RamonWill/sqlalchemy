@@ -1,21 +1,21 @@
 import sqlalchemy as sa
 from sqlalchemy import and_
+from sqlalchemy import cast
 from sqlalchemy import desc
 from sqlalchemy import event
 from sqlalchemy import func
 from sqlalchemy import Integer
+from sqlalchemy import literal_column
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import text
 from sqlalchemy import true
-from sqlalchemy.ext.declarative import comparable_using
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import attributes
 from sqlalchemy.orm import collections
 from sqlalchemy.orm import column_property
-from sqlalchemy.orm import comparable_property
 from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import contains_alias
 from sqlalchemy.orm import contains_eager
@@ -24,15 +24,12 @@ from sqlalchemy.orm import defer
 from sqlalchemy.orm import deferred
 from sqlalchemy.orm import eagerload
 from sqlalchemy.orm import foreign
-from sqlalchemy.orm import identity
 from sqlalchemy.orm import instrumentation
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import mapper
-from sqlalchemy.orm import PropComparator
 from sqlalchemy.orm import relation
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import synonym
 from sqlalchemy.orm import undefer
 from sqlalchemy.orm import with_polymorphic
@@ -45,357 +42,15 @@ from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_true
+from sqlalchemy.testing.mock import call
+from sqlalchemy.testing.mock import Mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
-from sqlalchemy.testing.util import gc_collect
 from . import _fixtures
 from .inheritance import _poly_fixtures
+from .test_events import _RemoveListeners
 from .test_options import PathTest as OptionsPathTest
 from .test_query import QueryTest
-from .test_transaction import _LocalFixture
-
-
-class DeprecationWarningsTest(fixtures.DeclarativeMappedTest):
-    run_setup_classes = "each"
-    run_setup_mappers = "each"
-    run_define_tables = "each"
-    run_create_tables = None
-
-    def test_session_weak_identity_map(self):
-        with testing.expect_deprecated(
-            ".*Session.weak_identity_map parameter as well as the"
-        ):
-            s = Session(weak_identity_map=True)
-
-        is_(s._identity_cls, identity.WeakInstanceDict)
-
-        with assertions.expect_deprecated(
-            "The Session.weak_identity_map parameter as well as"
-        ):
-            s = Session(weak_identity_map=False)
-
-            is_(s._identity_cls, identity.StrongInstanceDict)
-
-        s = Session()
-        is_(s._identity_cls, identity.WeakInstanceDict)
-
-    def test_session_prune(self):
-        s = Session()
-
-        with assertions.expect_deprecated(
-            r"The Session.prune\(\) method is deprecated along with "
-            "Session.weak_identity_map"
-        ):
-            s.prune()
-
-    def test_session_enable_transaction_accounting(self):
-        with assertions.expect_deprecated(
-            "the Session._enable_transaction_accounting parameter is "
-            "deprecated"
-        ):
-            Session(_enable_transaction_accounting=False)
-
-    def test_session_is_modified(self):
-        class Foo(self.DeclarativeBasic):
-            __tablename__ = "foo"
-
-            id = Column(Integer, primary_key=True)
-
-        f1 = Foo()
-        s = Session()
-        with assertions.expect_deprecated(
-            "The Session.is_modified.passive flag is deprecated"
-        ):
-            # this flag was for a long time documented as requiring
-            # that it be set to True, so we've changed the default here
-            # so that the warning emits
-            s.is_modified(f1, passive=True)
-
-
-class DeprecatedAccountingFlagsTest(_LocalFixture):
-    def test_rollback_no_accounting(self):
-        User, users = self.classes.User, self.tables.users
-
-        with testing.expect_deprecated(
-            "The Session._enable_transaction_accounting parameter"
-        ):
-            sess = sessionmaker(_enable_transaction_accounting=False)()
-        u1 = User(name="ed")
-        sess.add(u1)
-        sess.commit()
-
-        u1.name = "edwardo"
-        sess.rollback()
-
-        testing.db.execute(
-            users.update(users.c.name == "ed").values(name="edward")
-        )
-
-        assert u1.name == "edwardo"
-        sess.expire_all()
-        assert u1.name == "edward"
-
-    def test_commit_no_accounting(self):
-        User, users = self.classes.User, self.tables.users
-
-        with testing.expect_deprecated(
-            "The Session._enable_transaction_accounting parameter"
-        ):
-            sess = sessionmaker(_enable_transaction_accounting=False)()
-        u1 = User(name="ed")
-        sess.add(u1)
-        sess.commit()
-
-        u1.name = "edwardo"
-        sess.rollback()
-
-        testing.db.execute(
-            users.update(users.c.name == "ed").values(name="edward")
-        )
-
-        assert u1.name == "edwardo"
-        sess.commit()
-
-        assert testing.db.execute(select([users.c.name])).fetchall() == [
-            ("edwardo",)
-        ]
-        assert u1.name == "edwardo"
-
-        sess.delete(u1)
-        sess.commit()
-
-    def test_preflush_no_accounting(self):
-        User, users = self.classes.User, self.tables.users
-
-        with testing.expect_deprecated(
-            "The Session._enable_transaction_accounting parameter"
-        ):
-            sess = Session(
-                _enable_transaction_accounting=False,
-                autocommit=True,
-                autoflush=False,
-            )
-        u1 = User(name="ed")
-        sess.add(u1)
-        sess.flush()
-
-        sess.begin()
-        u1.name = "edwardo"
-        u2 = User(name="some other user")
-        sess.add(u2)
-
-        sess.rollback()
-
-        sess.begin()
-        assert testing.db.execute(select([users.c.name])).fetchall() == [
-            ("ed",)
-        ]
-
-
-class DeprecatedSessionFeatureTest(_fixtures.FixtureTest):
-    run_inserts = None
-
-    def test_fast_discard_race(self):
-        # test issue #4068
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        with testing.expect_deprecated(".*identity map are deprecated"):
-            sess = Session(weak_identity_map=False)
-
-        u1 = User(name="u1")
-        sess.add(u1)
-        sess.commit()
-
-        u1_state = u1._sa_instance_state
-        sess.identity_map._dict.pop(u1_state.key)
-        ref = u1_state.obj
-        u1_state.obj = lambda: None
-
-        u2 = sess.query(User).first()
-        u1_state._cleanup(ref)
-
-        u3 = sess.query(User).first()
-
-        is_(u2, u3)
-
-        u2_state = u2._sa_instance_state
-        assert sess.identity_map.contains_state(u2._sa_instance_state)
-        ref = u2_state.obj
-        u2_state.obj = lambda: None
-        u2_state._cleanup(ref)
-        assert not sess.identity_map.contains_state(u2._sa_instance_state)
-
-    def test_is_modified_passive_on(self):
-        User, Address = self.classes.User, self.classes.Address
-        users, addresses = self.tables.users, self.tables.addresses
-        mapper(User, users, properties={"addresses": relationship(Address)})
-        mapper(Address, addresses)
-
-        s = Session()
-        u = User(name="fred", addresses=[Address(email_address="foo")])
-        s.add(u)
-        s.commit()
-
-        u.id
-
-        def go():
-            assert not s.is_modified(u, passive=True)
-
-        with testing.expect_deprecated(
-            ".*Session.is_modified.passive flag is deprecated "
-        ):
-            self.assert_sql_count(testing.db, go, 0)
-
-        u.name = "newname"
-
-        def go():
-            assert s.is_modified(u, passive=True)
-
-        with testing.expect_deprecated(
-            ".*Session.is_modified.passive flag is deprecated "
-        ):
-            self.assert_sql_count(testing.db, go, 0)
-
-
-class StrongIdentityMapTest(_fixtures.FixtureTest):
-    run_inserts = None
-
-    def _strong_ident_fixture(self):
-        with testing.expect_deprecated(
-            ".*Session.weak_identity_map parameter as well as the"
-        ):
-            sess = create_session(weak_identity_map=False)
-
-        def prune():
-            with testing.expect_deprecated(".*Session.prune"):
-                return sess.prune()
-
-        return sess, prune
-
-    def _event_fixture(self):
-        session = create_session()
-
-        @event.listens_for(session, "pending_to_persistent")
-        @event.listens_for(session, "deleted_to_persistent")
-        @event.listens_for(session, "detached_to_persistent")
-        @event.listens_for(session, "loaded_as_persistent")
-        def strong_ref_object(sess, instance):
-            if "refs" not in sess.info:
-                sess.info["refs"] = refs = set()
-            else:
-                refs = sess.info["refs"]
-
-            refs.add(instance)
-
-        @event.listens_for(session, "persistent_to_detached")
-        @event.listens_for(session, "persistent_to_deleted")
-        @event.listens_for(session, "persistent_to_transient")
-        def deref_object(sess, instance):
-            sess.info["refs"].discard(instance)
-
-        def prune():
-            if "refs" not in session.info:
-                return 0
-
-            sess_size = len(session.identity_map)
-            session.info["refs"].clear()
-            gc_collect()
-            session.info["refs"] = set(
-                s.obj() for s in session.identity_map.all_states()
-            )
-            return sess_size - len(session.identity_map)
-
-        return session, prune
-
-    def test_strong_ref_imap(self):
-        self._test_strong_ref(self._strong_ident_fixture)
-
-    def test_strong_ref_events(self):
-        self._test_strong_ref(self._event_fixture)
-
-    def _test_strong_ref(self, fixture):
-        s, prune = fixture()
-
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        # save user
-        s.add(User(name="u1"))
-        s.flush()
-        user = s.query(User).one()
-        user = None
-        print(s.identity_map)
-        gc_collect()
-        assert len(s.identity_map) == 1
-
-        user = s.query(User).one()
-        assert not s.identity_map._modified
-        user.name = "u2"
-        assert s.identity_map._modified
-        s.flush()
-        eq_(users.select().execute().fetchall(), [(user.id, "u2")])
-
-    def test_prune_imap(self):
-        self._test_prune(self._strong_ident_fixture)
-
-    def test_prune_events(self):
-        self._test_prune(self._event_fixture)
-
-    @testing.requires.cpython
-    def _test_prune(self, fixture):
-        s, prune = fixture()
-
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        for o in [User(name="u%s" % x) for x in range(10)]:
-            s.add(o)
-        # o is still live after this loop...
-
-        self.assert_(len(s.identity_map) == 0)
-        eq_(prune(), 0)
-        s.flush()
-        gc_collect()
-        eq_(prune(), 9)
-        # o is still in local scope here, so still present
-        self.assert_(len(s.identity_map) == 1)
-
-        id_ = o.id
-        del o
-        eq_(prune(), 1)
-        self.assert_(len(s.identity_map) == 0)
-
-        u = s.query(User).get(id_)
-        eq_(prune(), 0)
-        self.assert_(len(s.identity_map) == 1)
-        u.name = "squiznart"
-        del u
-        eq_(prune(), 0)
-        self.assert_(len(s.identity_map) == 1)
-        s.flush()
-        eq_(prune(), 1)
-        self.assert_(len(s.identity_map) == 0)
-
-        s.add(User(name="x"))
-        eq_(prune(), 0)
-        self.assert_(len(s.identity_map) == 0)
-        s.flush()
-        self.assert_(len(s.identity_map) == 1)
-        eq_(prune(), 1)
-        self.assert_(len(s.identity_map) == 0)
-
-        u = s.query(User).get(id_)
-        s.delete(u)
-        del u
-        eq_(prune(), 0)
-        self.assert_(len(s.identity_map) == 1)
-        s.flush()
-        eq_(prune(), 0)
-        self.assert_(len(s.identity_map) == 0)
 
 
 class DeprecatedQueryTest(_fixtures.FixtureTest, AssertsCompiledSQL):
@@ -952,152 +607,6 @@ class DeprecatedMapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         )
         is_true(dep.compare(subq_version))
 
-    def test_cancel_order_by(self):
-        users, User = self.tables.users, self.classes.User
-
-        with testing.expect_deprecated(
-            "The Mapper.order_by parameter is deprecated, and will be "
-            "removed in a future release."
-        ):
-            mapper(User, users, order_by=users.c.name.desc())
-
-        assert (
-            "order by users.name desc"
-            in str(create_session().query(User).statement).lower()
-        )
-        assert (
-            "order by"
-            not in str(
-                create_session().query(User).order_by(None).statement
-            ).lower()
-        )
-        assert (
-            "order by users.name asc"
-            in str(
-                create_session()
-                .query(User)
-                .order_by(User.name.asc())
-                .statement
-            ).lower()
-        )
-
-        eq_(
-            create_session().query(User).all(),
-            [
-                User(id=7, name="jack"),
-                User(id=9, name="fred"),
-                User(id=8, name="ed"),
-                User(id=10, name="chuck"),
-            ],
-        )
-
-        eq_(
-            create_session().query(User).order_by(User.name).all(),
-            [
-                User(id=10, name="chuck"),
-                User(id=8, name="ed"),
-                User(id=9, name="fred"),
-                User(id=7, name="jack"),
-            ],
-        )
-
-    def test_comparable(self):
-        users = self.tables.users
-
-        class extendedproperty(property):
-            attribute = 123
-
-            def method1(self):
-                return "method1"
-
-        from sqlalchemy.orm.properties import ColumnProperty
-
-        class UCComparator(ColumnProperty.Comparator):
-            __hash__ = None
-
-            def method1(self):
-                return "uccmethod1"
-
-            def method2(self, other):
-                return "method2"
-
-            def __eq__(self, other):
-                cls = self.prop.parent.class_
-                col = getattr(cls, "name")
-                if other is None:
-                    return col is None
-                else:
-                    return sa.func.upper(col) == sa.func.upper(other)
-
-        def map_(with_explicit_property):
-            class User(object):
-                @extendedproperty
-                def uc_name(self):
-                    if self.name is None:
-                        return None
-                    return self.name.upper()
-
-            if with_explicit_property:
-                args = (UCComparator, User.uc_name)
-            else:
-                args = (UCComparator,)
-
-            with assertions.expect_deprecated(
-                r"comparable_property\(\) is deprecated and will be "
-                "removed in a future release."
-            ):
-                mapper(
-                    User,
-                    users,
-                    properties=dict(uc_name=sa.orm.comparable_property(*args)),
-                )
-                return User
-
-        for User in (map_(True), map_(False)):
-            sess = create_session()
-            sess.begin()
-            q = sess.query(User)
-
-            assert hasattr(User, "name")
-            assert hasattr(User, "uc_name")
-
-            eq_(User.uc_name.method1(), "method1")
-            eq_(User.uc_name.method2("x"), "method2")
-
-            assert_raises_message(
-                AttributeError,
-                "Neither 'extendedproperty' object nor 'UCComparator' "
-                "object associated with User.uc_name has an attribute "
-                "'nonexistent'",
-                getattr,
-                User.uc_name,
-                "nonexistent",
-            )
-
-            # test compile
-            assert not isinstance(User.uc_name == "jack", bool)
-            u = q.filter(User.uc_name == "JACK").one()
-
-            assert u.uc_name == "JACK"
-            assert u not in sess.dirty
-
-            u.name = "some user name"
-            eq_(u.name, "some user name")
-            assert u in sess.dirty
-            eq_(u.uc_name, "SOME USER NAME")
-
-            sess.flush()
-            sess.expunge_all()
-
-            q = sess.query(User)
-            u2 = q.filter(User.name == "some user name").one()
-            u3 = q.filter(User.uc_name == "SOME USER NAME").one()
-
-            assert u2 is u3
-
-            eq_(User.uc_name.attribute, 123)
-            sess.rollback()
-
     def test_comparable_column(self):
         users, User = self.tables.users, self.classes.User
 
@@ -1151,25 +660,6 @@ class DeprecatedMapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             "users.name &= :name_1",
         )
 
-    def test_info(self):
-        class MyComposite(object):
-            pass
-
-        with assertions.expect_deprecated(
-            r"comparable_property\(\) is deprecated and will be "
-            "removed in a future release."
-        ):
-            for constructor, args in [(comparable_property, "foo")]:
-                obj = constructor(info={"x": "y"}, *args)
-                eq_(obj.info, {"x": "y"})
-                obj.info["q"] = "p"
-                eq_(obj.info, {"x": "y", "q": "p"})
-
-                obj = constructor(*args)
-                eq_(obj.info, {})
-                obj.info["q"] = "p"
-                eq_(obj.info, {"q": "p"})
-
     def test_add_property(self):
         users = self.tables.users
 
@@ -1186,37 +676,10 @@ class DeprecatedMapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
             name = property(_get_name, _set_name)
 
-            def _uc_name(self):
-                if self._name is None:
-                    return None
-                return self._name.upper()
-
-            uc_name = property(_uc_name)
-            uc_name2 = property(_uc_name)
-
         m = mapper(User, users)
-
-        class UCComparator(PropComparator):
-            __hash__ = None
-
-            def __eq__(self, other):
-                cls = self.prop.parent.class_
-                col = getattr(cls, "name")
-                if other is None:
-                    return col is None
-                else:
-                    return func.upper(col) == func.upper(other)
 
         m.add_property("_name", deferred(users.c.name))
         m.add_property("name", synonym("_name"))
-        with assertions.expect_deprecated(
-            r"comparable_property\(\) is deprecated and will be "
-            "removed in a future release."
-        ):
-            m.add_property("uc_name", comparable_property(UCComparator))
-            m.add_property(
-                "uc_name2", comparable_property(UCComparator, User.uc_name2)
-            )
 
         sess = create_session(autocommit=False)
         assert sess.query(User).get(7)
@@ -1225,115 +688,9 @@ class DeprecatedMapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
         def go():
             eq_(u.name, "jack")
-            eq_(u.uc_name, "JACK")
-            eq_(u.uc_name2, "JACK")
             eq_(assert_col, [("get", "jack")], str(assert_col))
 
         self.sql_count_(1, go)
-
-    def test_kwarg_accepted(self):
-        class DummyComposite(object):
-            def __init__(self, x, y):
-                pass
-
-        class MyFactory(PropComparator):
-            pass
-
-        with assertions.expect_deprecated(
-            r"comparable_property\(\) is deprecated and will be "
-            "removed in a future release."
-        ):
-            for args in ((comparable_property,),):
-                fn = args[0]
-                args = args[1:]
-                fn(comparator_factory=MyFactory, *args)
-
-    def test_merge_synonym_comparable(self):
-        users = self.tables.users
-
-        class User(object):
-            class Comparator(PropComparator):
-                pass
-
-            def _getValue(self):
-                return self._value
-
-            def _setValue(self, value):
-                setattr(self, "_value", value)
-
-            value = property(_getValue, _setValue)
-
-        with assertions.expect_deprecated(
-            r"comparable_property\(\) is deprecated and will be "
-            "removed in a future release."
-        ):
-            mapper(
-                User,
-                users,
-                properties={
-                    "uid": synonym("id"),
-                    "foobar": comparable_property(User.Comparator, User.value),
-                },
-            )
-
-        sess = create_session()
-        u = User()
-        u.name = "ed"
-        sess.add(u)
-        sess.flush()
-        sess.expunge(u)
-        sess.merge(u)
-
-
-class DeprecatedDeclTest(fixtures.TestBase):
-    @testing.provide_metadata
-    def test_comparable_using(self):
-        class NameComparator(sa.orm.PropComparator):
-            @property
-            def upperself(self):
-                cls = self.prop.parent.class_
-                col = getattr(cls, "name")
-                return sa.func.upper(col)
-
-            def operate(self, op, other, **kw):
-                return op(self.upperself, other, **kw)
-
-        Base = declarative_base(metadata=self.metadata)
-
-        with testing.expect_deprecated(
-            r"comparable_property\(\) is deprecated and will be "
-            "removed in a future release."
-        ):
-
-            class User(Base, fixtures.ComparableEntity):
-
-                __tablename__ = "users"
-                id = Column(
-                    "id",
-                    Integer,
-                    primary_key=True,
-                    test_needs_autoincrement=True,
-                )
-                name = Column("name", String(50))
-
-                @comparable_using(NameComparator)
-                @property
-                def uc_name(self):
-                    return self.name is not None and self.name.upper() or None
-
-        Base.metadata.create_all()
-        sess = create_session()
-        u1 = User(name="someuser")
-        eq_(u1.name, "someuser", u1.name)
-        eq_(u1.uc_name, "SOMEUSER", u1.uc_name)
-        sess.add(u1)
-        sess.flush()
-        sess.expunge_all()
-        rt = sess.query(User).filter(User.uc_name == "SOMEUSER").one()
-        eq_(rt, u1)
-        sess.expunge_all()
-        rt = sess.query(User).filter(User.uc_name.startswith("SOMEUSE")).one()
-        eq_(rt, u1)
 
 
 class DeprecatedOptionAllTest(OptionsPathTest, _fixtures.FixtureTest):
@@ -1393,87 +750,11 @@ class DeprecatedOptionAllTest(OptionsPathTest, _fixtures.FixtureTest):
         assert_raises_message(
             sa.exc.ArgumentError,
             message,
-            create_session().query(*entity_list).options,
-            *options
+            create_session()
+            .query(*entity_list)
+            .options(*options)
+            ._compile_context,
         )
-
-    def test_subqueryload_mapper_order_by(self):
-        users, User, Address, addresses = (
-            self.tables.users,
-            self.classes.User,
-            self.classes.Address,
-            self.tables.addresses,
-        )
-
-        mapper(Address, addresses)
-
-        with testing.expect_deprecated(
-            ".*Mapper.order_by parameter is deprecated"
-        ):
-            mapper(
-                User,
-                users,
-                properties={
-                    "addresses": relationship(
-                        Address, lazy="subquery", order_by=addresses.c.id
-                    )
-                },
-                order_by=users.c.id.desc(),
-            )
-
-        sess = create_session()
-        q = sess.query(User)
-
-        result = q.limit(2).all()
-        eq_(result, list(reversed(self.static.user_address_result[2:4])))
-
-    def test_selectinload_mapper_order_by(self):
-        users, User, Address, addresses = (
-            self.tables.users,
-            self.classes.User,
-            self.classes.Address,
-            self.tables.addresses,
-        )
-
-        mapper(Address, addresses)
-        with testing.expect_deprecated(
-            ".*Mapper.order_by parameter is deprecated"
-        ):
-            mapper(
-                User,
-                users,
-                properties={
-                    "addresses": relationship(
-                        Address, lazy="selectin", order_by=addresses.c.id
-                    )
-                },
-                order_by=users.c.id.desc(),
-            )
-
-        sess = create_session()
-        q = sess.query(User)
-
-        result = q.limit(2).all()
-        eq_(result, list(reversed(self.static.user_address_result[2:4])))
-
-    def test_join_mapper_order_by(self):
-        """test that mapper-level order_by is adapted to a selectable."""
-
-        User, users = self.classes.User, self.tables.users
-
-        with testing.expect_deprecated(
-            ".*Mapper.order_by parameter is deprecated"
-        ):
-            mapper(User, users, order_by=users.c.id)
-
-        sel = users.select(users.c.id.in_([7, 8]))
-        sess = create_session()
-
-        with DeprecatedQueryTest._expect_implicit_subquery():
-            eq_(
-                sess.query(User).select_entity_from(sel).all(),
-                [User(name="jack", id=7), User(name="ed", id=8)],
-            )
 
     def test_defer_addtl_attrs(self):
         users, User, Address, addresses = (
@@ -1594,38 +875,6 @@ class InstrumentationTest(fixtures.ORMTest):
         eq_(Sub._sa_remover(Sub(), 5), "sub_remove")
         eq_(Sub._sa_iterator(Sub(), 5), "base_iterate")
         eq_(Sub._sa_converter(Sub(), 5), "sub_convert")
-
-    def test_link_event(self):
-        canary = []
-
-        with testing.expect_deprecated(
-            r"The collection.linker\(\) handler is deprecated and will "
-            "be removed in a future release.  Please refer to the "
-            "AttributeEvents"
-        ):
-
-            class Collection(list):
-                @collection.linker
-                def _on_link(self, obj):
-                    canary.append(obj)
-
-        class Foo(object):
-            pass
-
-        instrumentation.register_class(Foo)
-        attributes.register_attribute(
-            Foo, "attr", uselist=True, typecallable=Collection, useobject=True
-        )
-
-        f1 = Foo()
-        f1.attr.append(3)
-
-        eq_(canary, [f1.attr._sa_adapter])
-        adapter_1 = f1.attr._sa_adapter
-
-        l2 = Collection()
-        f1.attr = l2
-        eq_(canary, [adapter_1, f1.attr._sa_adapter, None])
 
 
 class NonPrimaryRelationshipLoaderTest(_fixtures.FixtureTest):
@@ -2052,6 +1301,10 @@ class NonPrimaryMapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
 
 class InstancesTest(QueryTest, AssertsCompiledSQL):
+    @testing.fails(
+        "ORM refactor not allowing this yet, "
+        "we may just abandon this use case"
+    )
     def test_from_alias_one(self):
         User, addresses, users = (
             self.classes.User,
@@ -2083,6 +1336,41 @@ class InstancesTest(QueryTest, AssertsCompiledSQL):
                     q.options(
                         contains_alias("ulist"), contains_eager("addresses")
                     ).instances(query.execute())
+                )
+            assert self.static.user_address_result == result
+
+        self.assert_sql_count(testing.db, go, 1)
+
+    def test_from_alias_two_old_way(self):
+        User, addresses, users = (
+            self.classes.User,
+            self.tables.addresses,
+            self.tables.users,
+        )
+
+        query = (
+            users.select(users.c.id == 7)
+            .union(users.select(users.c.id > 7))
+            .alias("ulist")
+            .outerjoin(addresses)
+            .select(
+                use_labels=True, order_by=[text("ulist.id"), addresses.c.id]
+            )
+        )
+        sess = create_session()
+        q = sess.query(User)
+
+        def go():
+            with testing.expect_deprecated(
+                "The AliasOption is not necessary for entities to be "
+                "matched up to a query"
+            ):
+                result = (
+                    q.options(
+                        contains_alias("ulist"), contains_eager("addresses")
+                    )
+                    .from_statement(query)
+                    .all()
                 )
             assert self.static.user_address_result == result
 
@@ -2364,3 +1652,302 @@ class DistinctOrderByImplicitTest(QueryTest, AssertsCompiledSQL):
                 "addresses_email_address FROM users, addresses "
                 "ORDER BY users.id, users.name, addresses.email_address",
             )
+
+
+class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
+    run_inserts = None
+
+    def test_on_bulk_update_hook(self):
+        User, users = self.classes.User, self.tables.users
+
+        sess = Session()
+        canary = Mock()
+
+        event.listen(sess, "after_bulk_update", canary.after_bulk_update)
+
+        def legacy(ses, qry, ctx, res):
+            canary.after_bulk_update_legacy(ses, qry, ctx, res)
+
+        event.listen(sess, "after_bulk_update", legacy)
+
+        mapper(User, users)
+
+        with testing.expect_deprecated(
+            'The argument signature for the "SessionEvents.after_bulk_update" '
+            "event listener"
+        ):
+            sess.query(User).update({"name": "foo"})
+
+        eq_(canary.after_bulk_update.call_count, 1)
+
+        upd = canary.after_bulk_update.mock_calls[0][1][0]
+        eq_(upd.session, sess)
+        eq_(
+            canary.after_bulk_update_legacy.mock_calls,
+            [call(sess, upd.query, None, upd.result)],
+        )
+
+    def test_on_bulk_delete_hook(self):
+        User, users = self.classes.User, self.tables.users
+
+        sess = Session()
+        canary = Mock()
+
+        event.listen(sess, "after_bulk_delete", canary.after_bulk_delete)
+
+        def legacy(ses, qry, ctx, res):
+            canary.after_bulk_delete_legacy(ses, qry, ctx, res)
+
+        event.listen(sess, "after_bulk_delete", legacy)
+
+        mapper(User, users)
+
+        with testing.expect_deprecated(
+            'The argument signature for the "SessionEvents.after_bulk_delete" '
+            "event listener"
+        ):
+            sess.query(User).delete()
+
+        eq_(canary.after_bulk_delete.call_count, 1)
+
+        upd = canary.after_bulk_delete.mock_calls[0][1][0]
+        eq_(upd.session, sess)
+        eq_(
+            canary.after_bulk_delete_legacy.mock_calls,
+            [call(sess, upd.query, None, upd.result)],
+        )
+
+
+class ImmediateTest(_fixtures.FixtureTest):
+    run_inserts = "once"
+    run_deletes = None
+
+    @classmethod
+    def setup_mappers(cls):
+        Address, addresses, users, User = (
+            cls.classes.Address,
+            cls.tables.addresses,
+            cls.tables.users,
+            cls.classes.User,
+        )
+
+        mapper(Address, addresses)
+
+        mapper(User, users, properties=dict(addresses=relationship(Address)))
+
+    def test_value(self):
+        User = self.classes.User
+
+        sess = create_session()
+
+        with testing.expect_deprecated(r"Query.value\(\) is deprecated"):
+            eq_(sess.query(User).filter_by(id=7).value(User.id), 7)
+        with testing.expect_deprecated(r"Query.value\(\) is deprecated"):
+            eq_(
+                sess.query(User.id, User.name).filter_by(id=7).value(User.id),
+                7,
+            )
+        with testing.expect_deprecated(r"Query.value\(\) is deprecated"):
+            eq_(sess.query(User).filter_by(id=0).value(User.id), None)
+
+        sess.bind = testing.db
+        with testing.expect_deprecated(r"Query.value\(\) is deprecated"):
+            eq_(sess.query().value(sa.literal_column("1").label("x")), 1)
+
+    def test_value_cancels_loader_opts(self):
+        User = self.classes.User
+
+        sess = create_session()
+
+        q = (
+            sess.query(User)
+            .filter(User.name == "ed")
+            .options(joinedload(User.addresses))
+        )
+
+        with testing.expect_deprecated(r"Query.value\(\) is deprecated"):
+            q = q.value(func.count(literal_column("*")))
+
+
+class MixedEntitiesTest(QueryTest, AssertsCompiledSQL):
+    __dialect__ = "default"
+
+    def test_values(self):
+        Address, users, User = (
+            self.classes.Address,
+            self.tables.users,
+            self.classes.User,
+        )
+
+        sess = create_session()
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            assert list(sess.query(User).values()) == list()
+
+        sel = users.select(User.id.in_([7, 8])).alias()
+        q = sess.query(User)
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = q.select_entity_from(sel).values(User.name)
+        eq_(list(q2), [("jack",), ("ed",)])
+
+        q = sess.query(User)
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = q.order_by(User.id).values(
+                User.name, User.name + " " + cast(User.id, String(50))
+            )
+        eq_(
+            list(q2),
+            [
+                ("jack", "jack 7"),
+                ("ed", "ed 8"),
+                ("fred", "fred 9"),
+                ("chuck", "chuck 10"),
+            ],
+        )
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.join("addresses")
+                .filter(User.name.like("%e%"))
+                .order_by(User.id, Address.id)
+                .values(User.name, Address.email_address)
+            )
+        eq_(
+            list(q2),
+            [
+                ("ed", "ed@wood.com"),
+                ("ed", "ed@bettyboop.com"),
+                ("ed", "ed@lala.com"),
+                ("fred", "fred@fred.com"),
+            ],
+        )
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.join("addresses")
+                .filter(User.name.like("%e%"))
+                .order_by(desc(Address.email_address))
+                .slice(1, 3)
+                .values(User.name, Address.email_address)
+            )
+        eq_(list(q2), [("ed", "ed@wood.com"), ("ed", "ed@lala.com")])
+
+        adalias = aliased(Address)
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.join(adalias, "addresses")
+                .filter(User.name.like("%e%"))
+                .order_by(adalias.email_address)
+                .values(User.name, adalias.email_address)
+            )
+        eq_(
+            list(q2),
+            [
+                ("ed", "ed@bettyboop.com"),
+                ("ed", "ed@lala.com"),
+                ("ed", "ed@wood.com"),
+                ("fred", "fred@fred.com"),
+            ],
+        )
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = q.values(func.count(User.name))
+        assert next(q2) == (4,)
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.select_entity_from(sel)
+                .filter(User.id == 8)
+                .values(User.name, sel.c.name, User.name)
+            )
+        eq_(list(q2), [("ed", "ed", "ed")])
+
+        # using User.xxx is alised against "sel", so this query returns nothing
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.select_entity_from(sel)
+                .filter(User.id == 8)
+                .filter(User.id > sel.c.id)
+                .values(User.name, sel.c.name, User.name)
+            )
+        eq_(list(q2), [])
+
+        # whereas this uses users.c.xxx, is not aliased and creates a new join
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.select_entity_from(sel)
+                .filter(users.c.id == 8)
+                .filter(users.c.id > sel.c.id)
+                .values(users.c.name, sel.c.name, User.name)
+            )
+            eq_(list(q2), [("ed", "jack", "jack")])
+
+    @testing.fails_on("mssql", "FIXME: unknown")
+    def test_values_specific_order_by(self):
+        users, User = self.tables.users, self.classes.User
+
+        sess = create_session()
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            assert list(sess.query(User).values()) == list()
+
+        sel = users.select(User.id.in_([7, 8])).alias()
+        q = sess.query(User)
+        u2 = aliased(User)
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.select_entity_from(sel)
+                .filter(u2.id > 1)
+                .filter(or_(u2.id == User.id, u2.id != User.id))
+                .order_by(User.id, sel.c.id, u2.id)
+                .values(User.name, sel.c.name, u2.name)
+            )
+        eq_(
+            list(q2),
+            [
+                ("jack", "jack", "jack"),
+                ("jack", "jack", "ed"),
+                ("jack", "jack", "fred"),
+                ("jack", "jack", "chuck"),
+                ("ed", "ed", "jack"),
+                ("ed", "ed", "ed"),
+                ("ed", "ed", "fred"),
+                ("ed", "ed", "chuck"),
+            ],
+        )
+
+    @testing.fails_on("mssql", "FIXME: unknown")
+    @testing.fails_on(
+        "oracle", "Oracle doesn't support boolean expressions as " "columns"
+    )
+    @testing.fails_on(
+        "postgresql+pg8000",
+        "pg8000 parses the SQL itself before passing on "
+        "to PG, doesn't parse this",
+    )
+    @testing.fails_on("firebird", "unknown")
+    def test_values_with_boolean_selects(self):
+        """Tests a values clause that works with select boolean
+        evaluations"""
+
+        User = self.classes.User
+
+        sess = create_session()
+
+        q = sess.query(User)
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = (
+                q.group_by(User.name.like("%j%"))
+                .order_by(desc(User.name.like("%j%")))
+                .values(
+                    User.name.like("%j%"), func.count(User.name.like("%j%"))
+                )
+            )
+        eq_(list(q2), [(True, 1), (False, 3)])
+
+        with testing.expect_deprecated(r"Query.values?\(\) is deprecated"):
+            q2 = q.order_by(desc(User.name.like("%j%"))).values(
+                User.name.like("%j%")
+            )
+        eq_(list(q2), [(True,), (False,), (False,), (False,)])

@@ -135,6 +135,67 @@ class String(Concatenable, TypeEngine):
 
     __visit_name__ = "string"
 
+    RETURNS_UNICODE = util.symbol(
+        "RETURNS_UNICODE",
+        """Indicates that the DBAPI returns Python Unicode for VARCHAR,
+        NVARCHAR, and other character-based datatypes in all cases.
+
+        This is the default value for
+        :attr:`.DefaultDialect.returns_unicode_strings` under Python 3.
+
+        .. versionadded:: 1.4
+
+        """,
+    )
+
+    RETURNS_BYTES = util.symbol(
+        "RETURNS_BYTES",
+        """Indicates that the DBAPI returns byte objects under Python 3
+        or non-Unicode string objects under Python 2 for VARCHAR, NVARCHAR,
+        and other character-based datatypes in all cases.
+
+        This may be applied to the
+        :attr:`.DefaultDialect.returns_unicode_strings` attribute.
+
+        .. versionadded:: 1.4
+
+        """,
+    )
+
+    RETURNS_CONDITIONAL = util.symbol(
+        "RETURNS_CONDITIONAL",
+        """Indicates that the DBAPI may return Unicode or bytestrings for
+        VARCHAR, NVARCHAR, and other character-based datatypes, and that
+        SQLAlchemy's default String datatype will need to test on a per-row
+        basis for Unicode or bytes.
+
+        This may be applied to the
+        :attr:`.DefaultDialect.returns_unicode_strings` attribute.
+
+        .. versionadded:: 1.4
+
+        """,
+    )
+
+    RETURNS_UNKNOWN = util.symbol(
+        "RETURNS_UNKNOWN",
+        """Indicates that the dialect should test on first connect what the
+        string-returning behavior of character-based datatypes is.
+
+        This is the default value for DefaultDialect.unicode_returns under
+        Python 2.
+
+        This may be applied to the
+        :attr:`.DefaultDialect.returns_unicode_strings` attribute under
+        Python 2 only.   The value is disallowed under Python 3.
+
+        .. versionadded:: 1.4
+
+        .. deprecated:: 1.4  This value will be removed in SQLAlchemy 2.0.
+
+        """,
+    )
+
     @util.deprecated_params(
         convert_unicode=(
             "1.3",
@@ -187,8 +248,8 @@ class String(Concatenable, TypeEngine):
           In the rare circumstance that the DBAPI does not support
           Python unicode under Python 2, SQLAlchemy will use its own
           encoder/decoder functionality on strings, referring to the
-          value of the :paramref:`.create_engine.encoding` parameter
-          parameter passed to :func:`.create_engine` as the encoding.
+          value of the :paramref:`_sa.create_engine.encoding` parameter
+          parameter passed to :func:`_sa.create_engine` as the encoding.
 
           For the extremely rare case that Python Unicode
           is to be encoded/decoded by SQLAlchemy on a backend
@@ -210,15 +271,16 @@ class String(Concatenable, TypeEngine):
 
             In the vast majority of cases, the :class:`.Unicode` or
             :class:`.UnicodeText` datatypes should be used for a
-            :class:`.Column` that expects to store non-ascii data.  These
+            :class:`_schema.Column` that expects to store non-ascii data.
+            These
             datatypes will ensure that the correct types are used on the
             database side as well as set up the correct Unicode behaviors
             under Python 2.
 
           .. seealso::
 
-            :paramref:`.create_engine.convert_unicode` -
-            :class:`.Engine`-wide parameter
+            :paramref:`_sa.create_engine.convert_unicode` -
+            :class:`_engine.Engine`-wide parameter
 
         :param unicode_error: Optional, a method to use to handle Unicode
           conversion errors. Behaves like the ``errors`` keyword argument to
@@ -292,12 +354,13 @@ class String(Concatenable, TypeEngine):
     def result_processor(self, dialect, coltype):
         wants_unicode = self._expect_unicode or dialect.convert_unicode
         needs_convert = wants_unicode and (
-            dialect.returns_unicode_strings is not True
+            dialect.returns_unicode_strings is not String.RETURNS_UNICODE
             or self._expect_unicode in ("force", "force_nocheck")
         )
         needs_isinstance = (
             needs_convert
             and dialect.returns_unicode_strings
+            in (String.RETURNS_CONDITIONAL, String.RETURNS_UNICODE,)
             and self._expect_unicode != "force_nocheck"
         )
         if needs_convert:
@@ -329,7 +392,8 @@ class String(Concatenable, TypeEngine):
             "unicode_error flag on String are deprecated.  All modern "
             "DBAPIs now support Python Unicode natively under Python 2, and "
             "under Python 3 all strings are inherently Unicode.  These flags "
-            "will be removed in a future release."
+            "will be removed in a future release.",
+            version="1.3",
         )
 
 
@@ -376,7 +440,7 @@ class Unicode(String):
     directly, SQLAlchemy does the encoding and decoding
     outside of the DBAPI.   The encoding in this scenario
     is determined by the ``encoding`` flag passed to
-    :func:`.create_engine`.
+    :func:`_sa.create_engine`.
 
     When using the :class:`.Unicode` type, it is only appropriate
     to pass Python ``unicode`` objects, and not plain ``str``.
@@ -439,7 +503,7 @@ class UnicodeText(Text):
         """
         Create a Unicode-converting Text type.
 
-        Parameters are the same as that of :class:`.Text`,
+        Parameters are the same as that of :class:`_expression.TextClause`,
         with the exception that ``convert_unicode``
         defaults to ``True``.
 
@@ -773,7 +837,7 @@ class DateTime(_LookupExpressionAdapter, TypeEngine):
     backends include additional options, such as timezone support and
     fractional seconds support.  For fractional seconds, use the
     dialect-specific datatype, such as :class:`.mysql.TIME`.  For
-    timezone support, use at least the :class:`~.types.TIMESTAMP` datatype,
+    timezone support, use at least the :class:`_types.TIMESTAMP` datatype,
     if not the dialect-specific datatype object.
 
     """
@@ -786,7 +850,7 @@ class DateTime(_LookupExpressionAdapter, TypeEngine):
         :param timezone: boolean.  Indicates that the datetime type should
          enable timezone support, if available on the
          **base date/time-holding type only**.   It is recommended
-         to make use of the :class:`~.types.TIMESTAMP` datatype directly when
+         to make use of the :class:`_types.TIMESTAMP` datatype directly when
          using this flag, as some databases include separate generic
          date/time-holding types distinct from the timezone-capable
          TIMESTAMP datatype, such as Oracle.
@@ -967,16 +1031,6 @@ class LargeBinary(_Binary):
         _Binary.__init__(self, length=length)
 
 
-@util.deprecated_cls(
-    "0.6",
-    "The :class:`.Binary` class is deprecated and will be removed "
-    "in a future relase.  Please use :class:`.LargeBinary`.",
-)
-class Binary(LargeBinary):
-    def __init__(self, *arg, **kw):
-        LargeBinary.__init__(self, *arg, **kw)
-
-
 class SchemaType(SchemaEventTarget):
 
     """Mark a type as possibly requiring schema-level DDL for usage.
@@ -989,7 +1043,7 @@ class SchemaType(SchemaEventTarget):
     :meth:`.DDLEvents.before_parent_attach` and
     :meth:`.DDLEvents.after_parent_attach` events, where the events fire off
     surrounding the association of the type object with a parent
-    :class:`.Column`.
+    :class:`_schema.Column`.
 
     .. seealso::
 
@@ -1177,11 +1231,10 @@ class Enum(Emulated, String, SchemaType):
     which the column is constrained towards.
 
     The :class:`.Enum` type will make use of the backend's native "ENUM"
-    type if one is available; otherwise, it uses a VARCHAR datatype and
-    produces a CHECK constraint.  Use of the backend-native enum type
-    can be disabled using the :paramref:`.Enum.native_enum` flag, and
-    the production of the CHECK constraint is configurable using the
-    :paramref:`.Enum.create_constraint` flag.
+    type if one is available; otherwise, it uses a VARCHAR datatype.
+    An option also exists to automatically produce a CHECK constraint
+    when the VARCHAR (so called "non-native") variant is produced;
+    see the  :paramref:`.Enum.create_constraint` flag.
 
     The :class:`.Enum` type also provides in-Python validation of string
     values during both read and write operations.  When reading a value
@@ -1240,7 +1293,7 @@ class Enum(Emulated, String, SchemaType):
 
     .. seealso::
 
-        :class:`.postgresql.ENUM` - PostgreSQL-specific type,
+        :class:`_postgresql.ENUM` - PostgreSQL-specific type,
         which has additional functionality.
 
         :class:`.mysql.ENUM` - MySQL-specific type
@@ -1275,13 +1328,20 @@ class Enum(Emulated, String, SchemaType):
            result-set processing for this Enum's data. This is set
            automatically based on the presence of unicode label strings.
 
-        :param create_constraint: defaults to True.  When creating a non-native
-           enumerated type, also build a CHECK constraint on the database
-           against the valid values.
+        :param create_constraint: defaults to False.  When creating a
+           non-native enumerated type, also build a CHECK constraint on the
+           database against the valid values.
 
-           .. versionadded:: 1.1 - added :paramref:`.Enum.create_constraint`
-              which provides the option to disable the production of the
-              CHECK constraint for a non-native enumerated type.
+           .. note:: it is strongly recommended that the CHECK constraint
+              have an explicit name in order to support schema-management
+              concerns.  This can be established either by setting the
+              :paramref:`.Enum.name` parameter or by setting up an
+              appropriate naming convention; see
+              :ref:`constraint_naming_conventions` for background.
+
+           .. versionchanged:: 1.4 - this flag now defaults to False, meaning
+              no CHECK constraint is generated for a non-native enumerated
+              type.
 
         :param metadata: Associate this type directly with a ``MetaData``
            object. For types that exist on the target database as an
@@ -1303,7 +1363,14 @@ class Enum(Emulated, String, SchemaType):
 
         :param native_enum: Use the database's native ENUM type when
            available. Defaults to True. When False, uses VARCHAR + check
-           constraint for all backends.
+           constraint for all backends. The VARCHAR length can be controlled
+           with :paramref:`.Enum.length`
+
+        :param length: Allows specifying a custom length for the VARCHAR
+           when :paramref:`.Enum.native_enum` is False. By default it uses the
+           length of the longest value.
+
+           .. versionadded:: 1.3.16
 
         :param schema: Schema name of this type. For types that exist on the
            target database as an independent schema construct (PostgreSQL),
@@ -1314,16 +1381,17 @@ class Enum(Emulated, String, SchemaType):
 
                 The ``schema`` of the :class:`.Enum` type does not
                 by default make use of the ``schema`` established on the
-                owning :class:`.Table`.  If this behavior is desired,
+                owning :class:`_schema.Table`.  If this behavior is desired,
                 set the ``inherit_schema`` flag to ``True``.
 
         :param quote: Set explicit quoting preferences for the type's name.
 
         :param inherit_schema: When ``True``, the "schema" from the owning
-           :class:`.Table` will be copied to the "schema" attribute of this
+           :class:`_schema.Table`
+           will be copied to the "schema" attribute of this
            :class:`.Enum`, replacing whatever value was passed for the
            ``schema`` attribute.   This also takes effect when using the
-           :meth:`.Table.tometadata` operation.
+           :meth:`_schema.Table.tometadata` operation.
 
         :param validate_strings: when True, string values that are being
            passed to the database in a SQL statement will be checked
@@ -1372,9 +1440,10 @@ class Enum(Emulated, String, SchemaType):
 
         """
         self.native_enum = kw.pop("native_enum", True)
-        self.create_constraint = kw.pop("create_constraint", True)
+        self.create_constraint = kw.pop("create_constraint", False)
         self.values_callable = kw.pop("values_callable", None)
         self._sort_key_function = kw.pop("sort_key_function", NO_ARG)
+        length_arg = kw.pop("length", NO_ARG)
 
         values, objects = self._parse_into_values(enums, kw)
         self._setup_for_values(values, objects, kw)
@@ -1398,6 +1467,15 @@ class Enum(Emulated, String, SchemaType):
             length = max(len(x) for x in self.enums)
         else:
             length = 0
+        if not self.native_enum and length_arg is not NO_ARG:
+            if length_arg < length:
+                raise ValueError(
+                    "When provided, length must be larger or equal"
+                    " than the length of the longest enum value. %s < %s"
+                    % (length_arg, length)
+                )
+            length = length_arg
+
         self._valid_lookup[None] = self._object_lookup[None] = None
 
         super(Enum, self).__init__(
@@ -1524,6 +1602,7 @@ class Enum(Emulated, String, SchemaType):
         kw.setdefault("native_enum", self.native_enum)
         kw.setdefault("values_callable", self.values_callable)
         kw.setdefault("create_constraint", self.create_constraint)
+        kw.setdefault("length", self.length)
         assert "_enums" in kw
         return impltype(**kw)
 
@@ -1701,10 +1780,8 @@ class Boolean(Emulated, TypeEngine, SchemaType):
     that the values persisted are simple true/false values.  For all
     backends, only the Python values ``None``, ``True``, ``False``, ``1``
     or ``0`` are accepted as parameter values.   For those backends that
-    don't support a "native boolean" datatype, a CHECK constraint is also
-    created on the target column.   Production of the CHECK constraint
-    can be disabled by passing the :paramref:`.Boolean.create_constraint`
-    flag set to ``False``.
+    don't support a "native boolean" datatype, an option exists to
+    also create a CHECK constraint on the target column
 
     .. versionchanged:: 1.2 the :class:`.Boolean` datatype now asserts that
        incoming Python values are already in pure boolean form.
@@ -1715,12 +1792,27 @@ class Boolean(Emulated, TypeEngine, SchemaType):
     __visit_name__ = "boolean"
     native = True
 
-    def __init__(self, create_constraint=True, name=None, _create_events=True):
+    def __init__(
+        self, create_constraint=False, name=None, _create_events=True
+    ):
         """Construct a Boolean.
 
-        :param create_constraint: defaults to True.  If the boolean
+        :param create_constraint: defaults to False.  If the boolean
           is generated as an int/smallint, also create a CHECK constraint
           on the table that ensures 1 or 0 as a value.
+
+          .. note:: it is strongly recommended that the CHECK constraint
+             have an explicit name in order to support schema-management
+             concerns.  This can be established either by setting the
+             :paramref:`.Boolean.name` parameter or by setting up an
+             appropriate naming convention; see
+             :ref:`constraint_naming_conventions` for background.
+
+           .. versionchanged:: 1.4 - this flag now defaults to False, meaning
+              no CHECK constraint is generated for a non-native enumerated
+              type.
+
+
 
         :param name: if a CHECK constraint is generated, specify
           the name of the constraint.
@@ -1926,7 +2018,8 @@ class Interval(Emulated, _AbstractInterval, TypeDecorator):
 class JSON(Indexable, TypeEngine):
     """Represent a SQL JSON type.
 
-    .. note::  :class:`.types.JSON` is provided as a facade for vendor-specific
+    .. note::  :class:`_types.JSON`
+       is provided as a facade for vendor-specific
        JSON types.  Since it supports JSON SQL operations, it only
        works on backends that have an actual JSON type, currently:
 
@@ -1936,10 +2029,10 @@ class JSON(Indexable, TypeEngine):
 
        * SQLite as of version 3.9
 
-    :class:`.types.JSON` is part of the Core in support of the growing
+    :class:`_types.JSON` is part of the Core in support of the growing
     popularity of native JSON datatypes.
 
-    The :class:`.types.JSON` type stores arbitrary JSON format data, e.g.::
+    The :class:`_types.JSON` type stores arbitrary JSON format data, e.g.::
 
         data_table = Table('data_table', metadata,
             Column('id', Integer, primary_key=True),
@@ -1954,7 +2047,8 @@ class JSON(Indexable, TypeEngine):
 
     **JSON-Specific Expression Operators**
 
-    The :class:`.types.JSON` datatype provides these additional SQL operations:
+    The :class:`_types.JSON`
+    datatype provides these additional SQL operations:
 
     * Keyed index operations::
 
@@ -1976,15 +2070,16 @@ class JSON(Indexable, TypeEngine):
       .. versionadded:: 1.3.11
 
     Additional operations may be available from the dialect-specific versions
-    of :class:`.types.JSON`, such as :class:`.postgresql.JSON` and
-    :class:`.postgresql.JSONB` which both offer additional PostgreSQL-specific
+    of :class:`_types.JSON`, such as :class:`_postgresql.JSON` and
+    :class:`_postgresql.JSONB` which both offer additional PostgreSQL-specific
     operations.
 
     **Casting JSON Elements to Other Types**
 
     Index operations, i.e. those invoked by calling upon the expression using
     the Python bracket operator as in ``some_column['some key']``, return an
-    expression object whose type defaults to :class:`.JSON` by default, so that
+    expression object whose type defaults to :class:`_types.JSON` by default,
+    so that
     further JSON-oriented instructions may be called upon the result type.
     However, it is likely more common that an index operation is expected
     to return a specific scalar element, such as a string or integer.  In
@@ -2033,7 +2128,7 @@ class JSON(Indexable, TypeEngine):
 
     **Detecting Changes in JSON columns when using the ORM**
 
-    The :class:`.JSON` type, when used with the SQLAlchemy ORM, does not
+    The :class:`_types.JSON` type, when used with the SQLAlchemy ORM, does not
     detect in-place mutations to the structure.  In order to detect these, the
     :mod:`sqlalchemy.ext.mutable` extension must be used.  This extension will
     allow "in-place" changes to the datastructure to produce events which
@@ -2042,7 +2137,8 @@ class JSON(Indexable, TypeEngine):
 
     **Support for JSON null vs. SQL NULL**
 
-    When working with NULL values, the :class:`.JSON` type recommends the
+    When working with NULL values, the :class:`_types.JSON`
+    type recommends the
     use of two specific constants in order to differentiate between a column
     that evaluates to SQL NULL, e.g. no value, vs. the JSON-encoded string
     of ``"null"``.   To insert or select against a value that is SQL NULL,
@@ -2052,30 +2148,31 @@ class JSON(Indexable, TypeEngine):
         conn.execute(table.insert(), json_value=null())
 
     To insert or select against a value that is JSON ``"null"``, use the
-    constant :attr:`.JSON.NULL`::
+    constant :attr:`_types.JSON.NULL`::
 
         conn.execute(table.insert(), json_value=JSON.NULL)
 
-    The :class:`.JSON` type supports a flag
-    :paramref:`.JSON.none_as_null` which when set to True will result
+    The :class:`_types.JSON` type supports a flag
+    :paramref:`_types.JSON.none_as_null` which when set to True will result
     in the Python constant ``None`` evaluating to the value of SQL
     NULL, and when set to False results in the Python constant
     ``None`` evaluating to the value of JSON ``"null"``.    The Python
     value ``None`` may be used in conjunction with either
-    :attr:`.JSON.NULL` and :func:`.null` in order to indicate NULL
+    :attr:`_types.JSON.NULL` and :func:`.null` in order to indicate NULL
     values, but care must be taken as to the value of the
-    :paramref:`.JSON.none_as_null` in these cases.
+    :paramref:`_types.JSON.none_as_null` in these cases.
 
     **Customizing the JSON Serializer**
 
-    The JSON serializer and deserializer used by :class:`.JSON` defaults to
+    The JSON serializer and deserializer used by :class:`_types.JSON`
+    defaults to
     Python's ``json.dumps`` and ``json.loads`` functions; in the case of the
     psycopg2 dialect, psycopg2 may be using its own custom loader function.
 
     In order to affect the serializer / deserializer, they are currently
-    configurable at the :func:`.create_engine` level via the
-    :paramref:`.create_engine.json_serializer` and
-    :paramref:`.create_engine.json_deserializer` parameters.  For example,
+    configurable at the :func:`_sa.create_engine` level via the
+    :paramref:`_sa.create_engine.json_serializer` and
+    :paramref:`_sa.create_engine.json_deserializer` parameters.  For example,
     to turn off ``ensure_ascii``::
 
         engine = create_engine(
@@ -2090,13 +2187,13 @@ class JSON(Indexable, TypeEngine):
 
     .. seealso::
 
-        :class:`.postgresql.JSON`
+        :class:`_postgresql.JSON`
 
-        :class:`.postgresql.JSONB`
+        :class:`_postgresql.JSONB`
 
         :class:`.mysql.JSON`
 
-        :class:`.sqlite.JSON`
+        :class:`_sqlite.JSON`
 
     .. versionadded:: 1.1
 
@@ -2112,9 +2209,11 @@ class JSON(Indexable, TypeEngine):
     This value is used to force the JSON value of ``"null"`` to be
     used as the value.   A value of Python ``None`` will be recognized
     either as SQL NULL or JSON ``"null"``, based on the setting
-    of the :paramref:`.JSON.none_as_null` flag; the :attr:`.JSON.NULL`
+    of the :paramref:`_types.JSON.none_as_null` flag; the
+    :attr:`_types.JSON.NULL`
     constant can be used to always resolve to JSON ``"null"`` regardless
-    of this setting.  This is in contrast to the :func:`.sql.null` construct,
+    of this setting.  This is in contrast to the :func:`_expression.null`
+    construct,
     which always resolves to SQL NULL.  E.g.::
 
         from sqlalchemy import null
@@ -2130,15 +2229,16 @@ class JSON(Indexable, TypeEngine):
         session.commit()
 
     In order to set JSON NULL as a default value for a column, the most
-    transparent method is to use :func:`.text`::
+    transparent method is to use :func:`_expression.text`::
 
         Table(
             'my_table', metadata,
             Column('json_data', JSON, default=text("'null'"))
         )
 
-    While it is possible to use :attr:`.JSON.NULL` in this context, the
-    :attr:`.JSON.NULL` value will be returned as the value of the column,
+    While it is possible to use :attr:`_types.JSON.NULL` in this context, the
+    :attr:`_types.JSON.NULL` value will be returned as the value of the column
+    ,
     which in the context of the ORM or other repurposing of the default
     value, may not be desirable.  Using a SQL expression means the value
     will be re-fetched from the database within the context of retrieving
@@ -2148,7 +2248,7 @@ class JSON(Indexable, TypeEngine):
     """
 
     def __init__(self, none_as_null=False):
-        """Construct a :class:`.types.JSON` type.
+        """Construct a :class:`_types.JSON` type.
 
         :param none_as_null=False: if True, persist the value ``None`` as a
          SQL NULL value, not the JSON encoding of ``null``.   Note that
@@ -2160,9 +2260,9 @@ class JSON(Indexable, TypeEngine):
 
          .. note::
 
-              :paramref:`.JSON.none_as_null` does **not** apply to the
-              values passed to :paramref:`.Column.default` and
-              :paramref:`.Column.server_default`; a value of ``None``
+              :paramref:`_types.JSON.none_as_null` does **not** apply to the
+              values passed to :paramref:`_schema.Column.default` and
+              :paramref:`_schema.Column.server_default`; a value of ``None``
               passed for these parameters means "no default present".
 
          .. seealso::
@@ -2227,7 +2327,7 @@ class JSON(Indexable, TypeEngine):
         """
 
     class Comparator(Indexable.Comparator, Concatenable.Comparator):
-        """Define comparison operations for :class:`.types.JSON`."""
+        """Define comparison operations for :class:`_types.JSON`."""
 
         def _setup_getitem(self, index):
             if not isinstance(index, util.string_types) and isinstance(
@@ -2357,7 +2457,7 @@ class JSON(Indexable, TypeEngine):
 
     @property
     def should_evaluate_none(self):
-        """Alias of :attr:`.JSON.none_as_null`"""
+        """Alias of :attr:`_types.JSON.none_as_null`"""
         return not self.none_as_null
 
     @should_evaluate_none.setter
@@ -2408,17 +2508,18 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
     .. note::  This type serves as the basis for all ARRAY operations.
        However, currently **only the PostgreSQL backend has support
        for SQL arrays in SQLAlchemy**.  It is recommended to use the
-       :class:`.postgresql.ARRAY` type directly when using ARRAY types
+       :class:`_postgresql.ARRAY` type directly when using ARRAY types
        with PostgreSQL, as it provides additional operators specific
        to that backend.
 
-    :class:`.types.ARRAY` is part of the Core in support of various SQL
-    standard functions such as :class:`.array_agg` which explicitly involve
+    :class:`_types.ARRAY` is part of the Core in support of various SQL
+    standard functions such as :class:`_functions.array_agg`
+    which explicitly involve
     arrays; however, with the exception of the PostgreSQL backend and possibly
     some third-party dialects, no other SQLAlchemy built-in dialect has support
     for this type.
 
-    An :class:`.types.ARRAY` type is constructed given the "type"
+    An :class:`_types.ARRAY` type is constructed given the "type"
     of element::
 
         mytable = Table("mytable", metadata,
@@ -2435,7 +2536,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
                 data=[1,2,3]
         )
 
-    The :class:`.types.ARRAY` type can be constructed given a fixed number
+    The :class:`_types.ARRAY` type can be constructed given a fixed number
     of dimensions::
 
         mytable = Table("mytable", metadata,
@@ -2461,10 +2562,10 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
           >>> expr = table.c.column[5]  # returns ARRAY(Integer, dimensions=1)
           >>> expr = expr[6]  # returns Integer
 
-    For 1-dimensional arrays, an :class:`.types.ARRAY` instance with no
+    For 1-dimensional arrays, an :class:`_types.ARRAY` instance with no
     dimension parameter will generally assume single-dimensional behaviors.
 
-    SQL expressions of type :class:`.types.ARRAY` have support for "index" and
+    SQL expressions of type :class:`_types.ARRAY` have support for "index" and
     "slice" behavior.  The Python ``[]`` operator works normally here, given
     integer indexes or slices.  Arrays default to 1-based indexing.
     The operator produces binary expression
@@ -2473,7 +2574,8 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
 
         select([mytable.c.data[5], mytable.c.data[2:7]])
 
-    as well as UPDATE statements when the :meth:`.Update.values` method
+    as well as UPDATE statements when the :meth:`_expression.Update.values`
+    method
     is used::
 
         mytable.update().values({
@@ -2481,16 +2583,16 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
             mytable.c.data[2:7]: [1, 2, 3]
         })
 
-    The :class:`.types.ARRAY` type also provides for the operators
+    The :class:`_types.ARRAY` type also provides for the operators
     :meth:`.types.ARRAY.Comparator.any` and
     :meth:`.types.ARRAY.Comparator.all`. The PostgreSQL-specific version of
-    :class:`.types.ARRAY` also provides additional operators.
+    :class:`_types.ARRAY` also provides additional operators.
 
     .. versionadded:: 1.1.0
 
     .. seealso::
 
-        :class:`.postgresql.ARRAY`
+        :class:`_postgresql.ARRAY`
 
     """
 
@@ -2502,7 +2604,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
 
     class Comparator(Indexable.Comparator, Concatenable.Comparator):
 
-        """Define comparison operations for :class:`.types.ARRAY`.
+        """Define comparison operations for :class:`_types.ARRAY`.
 
         More operators are available on the dialect-specific form
         of this type.  See :class:`.postgresql.ARRAY.Comparator`.
@@ -2514,26 +2616,10 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
                 return_type = self.type
                 if self.type.zero_indexes:
                     index = slice(index.start + 1, index.stop + 1, index.step)
-                index = Slice(
-                    coercions.expect(
-                        roles.ExpressionElementRole,
-                        index.start,
-                        name=self.expr.key,
-                        type_=type_api.INTEGERTYPE,
-                    ),
-                    coercions.expect(
-                        roles.ExpressionElementRole,
-                        index.stop,
-                        name=self.expr.key,
-                        type_=type_api.INTEGERTYPE,
-                    ),
-                    coercions.expect(
-                        roles.ExpressionElementRole,
-                        index.step,
-                        name=self.expr.key,
-                        type_=type_api.INTEGERTYPE,
-                    ),
+                slice_ = Slice(
+                    index.start, index.stop, index.step, _name=self.expr.key
                 )
+                return operators.getitem, slice_, return_type
             else:
                 if self.type.zero_indexes:
                     index += 1
@@ -2545,7 +2631,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
                         self.type.__class__, **adapt_kw
                     )
 
-            return operators.getitem, index, return_type
+                return operators.getitem, index, return_type
 
         def contains(self, *arg, **kw):
             raise NotImplementedError(
@@ -2577,7 +2663,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
 
             .. seealso::
 
-                :func:`.sql.expression.any_`
+                :func:`_expression.any_`
 
                 :meth:`.types.ARRAY.Comparator.all`
 
@@ -2613,7 +2699,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
 
             .. seealso::
 
-                :func:`.sql.expression.all_`
+                :func:`_expression.all_`
 
                 :meth:`.types.ARRAY.Comparator.any`
 
@@ -2630,7 +2716,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
     def __init__(
         self, item_type, as_tuple=False, dimensions=None, zero_indexes=False
     ):
-        """Construct an :class:`.types.ARRAY`.
+        """Construct an :class:`_types.ARRAY`.
 
         E.g.::
 
@@ -2653,7 +2739,7 @@ class ARRAY(SchemaEventTarget, Indexable, Concatenable, TypeEngine):
          on the database, how it goes about interpreting Python and
          result values, as well as how expression behavior in conjunction
          with the "getitem" operator works.  See the description at
-         :class:`.types.ARRAY` for additional detail.
+         :class:`_types.ARRAY` for additional detail.
 
         :param zero_indexes=False: when True, index values will be converted
          between Python zero-based and SQL one-based indexes, e.g.
@@ -2755,7 +2841,7 @@ class TIMESTAMP(DateTime):
 
     """The SQL TIMESTAMP type.
 
-    :class:`~.types.TIMESTAMP` datatypes have support for timezone
+    :class:`_types.TIMESTAMP` datatypes have support for timezone
     storage on some backends, such as PostgreSQL and Oracle.  Use the
     :paramref:`~types.TIMESTAMP.timezone` argument in order to enable
     "TIMESTAMP WITH TIMEZONE" for these backends.
@@ -2765,7 +2851,7 @@ class TIMESTAMP(DateTime):
     __visit_name__ = "TIMESTAMP"
 
     def __init__(self, timezone=False):
-        """Construct a new :class:`.TIMESTAMP`.
+        """Construct a new :class:`_types.TIMESTAMP`.
 
         :param timezone: boolean.  Indicates that the TIMESTAMP type should
          enable timezone support, if available on the target database.
@@ -2886,7 +2972,8 @@ class NullType(TypeEngine):
       by the :class:`.Dialect`
     * When constructing SQL expressions using plain Python objects of
       unknown types (e.g. ``somecolumn == my_special_object``)
-    * When a new :class:`.Column` is created, and the given type is passed
+    * When a new :class:`_schema.Column` is created,
+      and the given type is passed
       as ``None`` or is not passed at all.
 
     The :class:`.NullType` can be used within SQL expression invocation
@@ -2895,7 +2982,8 @@ class NullType(TypeEngine):
     :class:`.NullType` will result in a :exc:`.CompileError` if the compiler
     is asked to render the type itself, such as if it is used in a
     :func:`.cast` operation or within a schema creation operation such as that
-    invoked by :meth:`.MetaData.create_all` or the :class:`.CreateTable`
+    invoked by :meth:`_schema.MetaData.create_all` or the
+    :class:`.CreateTable`
     construct.
 
     """

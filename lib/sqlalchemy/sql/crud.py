@@ -24,10 +24,10 @@ REQUIRED = util.symbol(
     """
 Placeholder for the value within a :class:`.BindParameter`
 which is required to be present when the statement is passed
-to :meth:`.Connection.execute`.
+to :meth:`_engine.Connection.execute`.
 
-This symbol is typically used when a :func:`.expression.insert`
-or :func:`.expression.update` statement is compiled without parameter
+This symbol is typically used when a :func:`_expression.insert`
+or :func:`_expression.update` statement is compiled without parameter
 values present.
 
 """,
@@ -40,7 +40,7 @@ def _get_crud_params(compiler, stmt, compile_state, **kw):
 
     Also generates the Compiled object's postfetch, prefetch, and
     returning column collections, used for default handling and ultimately
-    populating the ResultProxy's prefetch_cols() and postfetch_cols()
+    populating the CursorResult's prefetch_cols() and postfetch_cols()
     collections.
 
     """

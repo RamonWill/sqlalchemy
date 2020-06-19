@@ -17,8 +17,12 @@ from .traversals import anon_map
 from .visitors import InternalTraversal
 from .. import util
 
+EMPTY_ANNOTATIONS = util.immutabledict()
+
 
 class SupportsAnnotations(object):
+    _annotations = EMPTY_ANNOTATIONS
+
     @util.memoized_property
     def _annotations_cache_key(self):
         anon_map_ = anon_map()
@@ -31,13 +35,15 @@ class SupportsAnnotations(object):
                     if isinstance(value, HasCacheKey)
                     else value,
                 )
-                for key, value in self._annotations.items()
+                for key, value in [
+                    (key, self._annotations[key])
+                    for key in sorted(self._annotations)
+                ]
             ),
         )
 
 
 class SupportsCloneAnnotations(SupportsAnnotations):
-    _annotations = util.immutabledict()
 
     _clone_annotations_traverse_internals = [
         ("_annotations", InternalTraversal.dp_annotations_key)
@@ -51,6 +57,7 @@ class SupportsCloneAnnotations(SupportsAnnotations):
         new = self._clone()
         new._annotations = new._annotations.union(values)
         new.__dict__.pop("_annotations_cache_key", None)
+        new.__dict__.pop("_generate_cache_key", None)
         return new
 
     def _with_annotations(self, values):
@@ -61,10 +68,12 @@ class SupportsCloneAnnotations(SupportsAnnotations):
         new = self._clone()
         new._annotations = util.immutabledict(values)
         new.__dict__.pop("_annotations_cache_key", None)
+        new.__dict__.pop("_generate_cache_key", None)
         return new
 
     def _deannotate(self, values=None, clone=False):
-        """return a copy of this :class:`.ClauseElement` with annotations
+        """return a copy of this :class:`_expression.ClauseElement`
+        with annotations
         removed.
 
         :param values: optional tuple of individual values
@@ -75,7 +84,7 @@ class SupportsCloneAnnotations(SupportsAnnotations):
             # clone is used when we are also copying
             # the expression for a deep deannotation
             new = self._clone()
-            new._annotations = {}
+            new._annotations = util.immutabledict()
             new.__dict__.pop("_annotations_cache_key", None)
             return new
         else:
@@ -98,7 +107,8 @@ class SupportsWrappingAnnotations(SupportsAnnotations):
         return Annotated(self, values)
 
     def _deannotate(self, values=None, clone=False):
-        """return a copy of this :class:`.ClauseElement` with annotations
+        """return a copy of this :class:`_expression.ClauseElement`
+        with annotations
         removed.
 
         :param values: optional tuple of individual values
@@ -106,12 +116,9 @@ class SupportsWrappingAnnotations(SupportsAnnotations):
 
         """
         if clone:
-            # clone is used when we are also copying
-            # the expression for a deep deannotation
-            return self._clone()
+            s = self._clone()
+            return s
         else:
-            # if no clone, since we have no annotations we return
-            # self
             return self
 
 
@@ -154,19 +161,20 @@ class Annotated(object):
     def __init__(self, element, values):
         self.__dict__ = element.__dict__.copy()
         self.__dict__.pop("_annotations_cache_key", None)
+        self.__dict__.pop("_generate_cache_key", None)
         self.__element = element
-        self._annotations = values
+        self._annotations = util.immutabledict(values)
         self._hash = hash(element)
 
     def _annotate(self, values):
-        _values = self._annotations.copy()
-        _values.update(values)
+        _values = self._annotations.union(values)
         return self._with_annotations(_values)
 
     def _with_annotations(self, values):
         clone = self.__class__.__new__(self.__class__)
         clone.__dict__ = self.__dict__.copy()
         clone.__dict__.pop("_annotations_cache_key", None)
+        clone.__dict__.pop("_generate_cache_key", None)
         clone._annotations = values
         return clone
 
@@ -174,10 +182,15 @@ class Annotated(object):
         if values is None:
             return self.__element
         else:
-            _values = self._annotations.copy()
-            for v in values:
-                _values.pop(v, None)
-            return self._with_annotations(_values)
+            return self._with_annotations(
+                util.immutabledict(
+                    {
+                        key: value
+                        for key, value in self._annotations.items()
+                        if key not in values
+                    }
+                )
+            )
 
     def _compiler_dispatch(self, visitor, **kw):
         return self.__element.__class__._compiler_dispatch(self, visitor, **kw)
@@ -208,6 +221,13 @@ class Annotated(object):
             return self.__element.__class__.__eq__(self, other)
         else:
             return hash(other) == hash(self)
+
+    @property
+    def entity_namespace(self):
+        if "entity_namespace" in self._annotations:
+            return self._annotations["entity_namespace"].entity_namespace
+        else:
+            return self.__element.entity_namespace
 
 
 # hard-generate Annotated subclasses.  this technique
@@ -318,6 +338,15 @@ def _new_annotation_type(cls, base_cls):
         anno_cls._traverse_internals = list(cls._traverse_internals) + [
             ("_annotations", InternalTraversal.dp_annotations_key)
         ]
+    elif cls.__dict__.get("inherit_cache", False):
+        anno_cls._traverse_internals = list(cls._traverse_internals) + [
+            ("_annotations", InternalTraversal.dp_annotations_key)
+        ]
+
+    # some classes include this even if they have traverse_internals
+    # e.g. BindParameter, add it if present.
+    if cls.__dict__.get("inherit_cache", False):
+        anno_cls.inherit_cache = True
 
     anno_cls._is_column_operators = issubclass(cls, operators.ColumnOperators)
 

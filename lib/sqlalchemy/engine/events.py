@@ -11,18 +11,17 @@ from .interfaces import Connectable
 from .interfaces import Dialect
 from .. import event
 from .. import exc
-from .. import util
 
 
 class ConnectionEvents(event.Events):
     """Available events for :class:`.Connectable`, which includes
-    :class:`.Connection` and :class:`.Engine`.
+    :class:`_engine.Connection` and :class:`_engine.Engine`.
 
     The methods here define the name of an event as well as the names of
     members that are passed to listener functions.
 
     An event listener can be associated with any :class:`.Connectable`
-    class or instance, such as an :class:`.Engine`, e.g.::
+    class or instance, such as an :class:`_engine.Engine`, e.g.::
 
         from sqlalchemy import event, create_engine
 
@@ -33,7 +32,7 @@ class ConnectionEvents(event.Events):
         engine = create_engine('postgresql://scott:tiger@localhost/test')
         event.listen(engine, "before_cursor_execute", before_cursor_execute)
 
-    or with a specific :class:`.Connection`::
+    or with a specific :class:`_engine.Connection`::
 
         with engine.begin() as conn:
             @event.listens_for(conn, 'before_cursor_execute')
@@ -42,10 +41,9 @@ class ConnectionEvents(event.Events):
                 log.info("Received statement: %s", statement)
 
     When the methods are called with a `statement` parameter, such as in
-    :meth:`.after_cursor_execute`, :meth:`.before_cursor_execute` and
-    :meth:`.dbapi_error`, the statement is the exact SQL string that was
-    prepared for transmission to the DBAPI ``cursor`` in the connection's
-    :class:`.Dialect`.
+    :meth:`.after_cursor_execute` or :meth:`.before_cursor_execute`,
+    the statement is the exact SQL string that was prepared for transmission
+    to the DBAPI ``cursor`` in the connection's :class:`.Dialect`.
 
     The :meth:`.before_execute` and :meth:`.before_cursor_execute`
     events can also be established with the ``retval=True`` flag, which
@@ -63,20 +61,24 @@ class ConnectionEvents(event.Events):
             statement = statement + " -- some comment"
             return statement, parameters
 
-    .. note:: :class:`.ConnectionEvents` can be established on any
-       combination of :class:`.Engine`, :class:`.Connection`, as well
+    .. note:: :class:`_events.ConnectionEvents` can be established on any
+       combination of :class:`_engine.Engine`, :class:`_engine.Connection`,
+       as well
        as instances of each of those classes.  Events across all
        four scopes will fire off for a given instance of
-       :class:`.Connection`.  However, for performance reasons, the
-       :class:`.Connection` object determines at instantiation time
-       whether or not its parent :class:`.Engine` has event listeners
-       established.   Event listeners added to the :class:`.Engine`
-       class or to an instance of :class:`.Engine` *after* the instantiation
-       of a dependent :class:`.Connection` instance will usually
-       *not* be available on that :class:`.Connection` instance.  The newly
-       added listeners will instead take effect for :class:`.Connection`
+       :class:`_engine.Connection`.  However, for performance reasons, the
+       :class:`_engine.Connection` object determines at instantiation time
+       whether or not its parent :class:`_engine.Engine` has event listeners
+       established.   Event listeners added to the :class:`_engine.Engine`
+       class or to an instance of :class:`_engine.Engine`
+       *after* the instantiation
+       of a dependent :class:`_engine.Connection` instance will usually
+       *not* be available on that :class:`_engine.Connection` instance.
+       The newly
+       added listeners will instead take effect for
+       :class:`_engine.Connection`
        instances created subsequent to those event listeners being
-       established on the parent :class:`.Engine` class or instance.
+       established on the parent :class:`_engine.Engine` class or instance.
 
     :param retval=False: Applies to the :meth:`.before_execute` and
       :meth:`.before_cursor_execute` events only.  When True, the
@@ -105,9 +107,15 @@ class ConnectionEvents(event.Events):
                 orig_fn = fn
 
                 def wrap_before_execute(
-                    conn, clauseelement, multiparams, params
+                    conn, clauseelement, multiparams, params, execution_options
                 ):
-                    orig_fn(conn, clauseelement, multiparams, params)
+                    orig_fn(
+                        conn,
+                        clauseelement,
+                        multiparams,
+                        params,
+                        execution_options,
+                    )
                     return clauseelement, multiparams, params
 
                 fn = wrap_before_execute
@@ -141,7 +149,19 @@ class ConnectionEvents(event.Events):
             )
         event_key.with_wrapper(fn).base_listen()
 
-    def before_execute(self, conn, clauseelement, multiparams, params):
+    @event._legacy_signature(
+        "1.4",
+        ["conn", "clauseelement", "multiparams", "params"],
+        lambda conn, clauseelement, multiparams, params, execution_options: (
+            conn,
+            clauseelement,
+            multiparams,
+            params,
+        ),
+    )
+    def before_execute(
+        self, conn, clauseelement, multiparams, params, execution_options
+    ):
         """Intercept high level execute() events, receiving uncompiled
         SQL constructs and other objects prior to rendering into SQL.
 
@@ -158,11 +178,19 @@ class ConnectionEvents(event.Events):
                 # do something with clauseelement, multiparams, params
                 return clauseelement, multiparams, params
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param clauseelement: SQL expression construct, :class:`.Compiled`
-         instance, or string statement passed to :meth:`.Connection.execute`.
+         instance, or string statement passed to
+         :meth:`_engine.Connection.execute`.
         :param multiparams: Multiple parameter sets, a list of dictionaries.
         :param params: Single parameter set, a single dictionary.
+        :param execution_options: dictionary of execution
+         options passed along with the statement, if any.  This is a merge
+         of all options that will be used, including those of the statement,
+         the connection, and those passed in to the method itself for
+         the 2.0 style of execution.
+
+         .. versionadded: 1.4
 
         .. seealso::
 
@@ -170,16 +198,45 @@ class ConnectionEvents(event.Events):
 
         """
 
-    def after_execute(self, conn, clauseelement, multiparams, params, result):
+    @event._legacy_signature(
+        "1.4",
+        ["conn", "clauseelement", "multiparams", "params", "result"],
+        lambda conn, clauseelement, multiparams, params, execution_options, result: (  # noqa
+            conn,
+            clauseelement,
+            multiparams,
+            params,
+            result,
+        ),
+    )
+    def after_execute(
+        self,
+        conn,
+        clauseelement,
+        multiparams,
+        params,
+        execution_options,
+        result,
+    ):
         """Intercept high level execute() events after execute.
 
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param clauseelement: SQL expression construct, :class:`.Compiled`
-         instance, or string statement passed to :meth:`.Connection.execute`.
+         instance, or string statement passed to
+         :meth:`_engine.Connection.execute`.
         :param multiparams: Multiple parameter sets, a list of dictionaries.
         :param params: Single parameter set, a single dictionary.
-        :param result: :class:`.ResultProxy` generated by the execution.
+        :param execution_options: dictionary of execution
+         options passed along with the statement, if any.  This is a merge
+         of all options that will be used, including those of the statement,
+         the connection, and those passed in to the method itself for
+         the 2.0 style of execution.
+
+         .. versionadded: 1.4
+
+        :param result: :class:`_engine.CursorResult` generated by the execution
+                      .
 
         """
 
@@ -204,9 +261,9 @@ class ConnectionEvents(event.Events):
                 # do something with statement, parameters
                 return statement, parameters
 
-        See the example at :class:`.ConnectionEvents`.
+        See the example at :class:`_events.ConnectionEvents`.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param cursor: DBAPI cursor object
         :param statement: string SQL statement, as to be passed to the DBAPI
         :param parameters: Dictionary, tuple, or list of parameters being
@@ -230,10 +287,10 @@ class ConnectionEvents(event.Events):
     ):
         """Intercept low-level cursor execute() events after execution.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param cursor: DBAPI cursor object.  Will have results pending
          if the statement was a SELECT, but these should not be consumed
-         as they will be needed by the :class:`.ResultProxy`.
+         as they will be needed by the :class:`_engine.CursorResult`.
         :param statement: string SQL statement, as passed to the DBAPI
         :param parameters: Dictionary, tuple, or list of parameters being
          passed to the ``execute()`` or ``executemany()`` method of the
@@ -245,60 +302,9 @@ class ConnectionEvents(event.Events):
 
         """
 
-    @util.deprecated(
-        "0.9",
-        "The :meth:`.ConnectionEvents.dbapi_error` "
-        "event is deprecated and will be removed in a future release. "
-        "Please refer to the :meth:`.ConnectionEvents.handle_error` "
-        "event.",
-    )
-    def dbapi_error(
-        self, conn, cursor, statement, parameters, context, exception
-    ):
-        """Intercept a raw DBAPI error.
-
-        This event is called with the DBAPI exception instance
-        received from the DBAPI itself, *before* SQLAlchemy wraps the
-        exception with it's own exception wrappers, and before any
-        other operations are performed on the DBAPI cursor; the
-        existing transaction remains in effect as well as any state
-        on the cursor.
-
-        The use case here is to inject low-level exception handling
-        into an :class:`.Engine`, typically for logging and
-        debugging purposes.
-
-        .. warning::
-
-            Code should **not** modify
-            any state or throw any exceptions here as this will
-            interfere with SQLAlchemy's cleanup and error handling
-            routines.  For exception modification, please refer to the
-            new :meth:`.ConnectionEvents.handle_error` event.
-
-        Subsequent to this hook, SQLAlchemy may attempt any
-        number of operations on the connection/cursor, including
-        closing the cursor, rolling back of the transaction in the
-        case of connectionless execution, and disposing of the entire
-        connection pool if a "disconnect" was detected.   The
-        exception is then wrapped in a SQLAlchemy DBAPI exception
-        wrapper and re-thrown.
-
-        :param conn: :class:`.Connection` object
-        :param cursor: DBAPI cursor object
-        :param statement: string SQL statement, as passed to the DBAPI
-        :param parameters: Dictionary, tuple, or list of parameters being
-         passed to the ``execute()`` or ``executemany()`` method of the
-         DBAPI ``cursor``.  In some cases may be ``None``.
-        :param context: :class:`.ExecutionContext` object in use.  May
-         be ``None``.
-        :param exception: The **unwrapped** exception emitted directly from the
-         DBAPI.  The class here is specific to the DBAPI module in use.
-
-        """
-
     def handle_error(self, exception_context):
-        r"""Intercept all exceptions processed by the :class:`.Connection`.
+        r"""Intercept all exceptions processed by the
+        :class:`_engine.Connection`.
 
         This includes all exceptions emitted by the DBAPI as well as
         within SQLAlchemy's statement invocation process, including
@@ -364,7 +370,8 @@ class ConnectionEvents(event.Events):
                     "failed" in str(context.original_exception):
                     raise MySpecialException("failed operation")
 
-        .. warning::  Because the :meth:`.ConnectionEvents.handle_error`
+        .. warning::  Because the
+           :meth:`_events.ConnectionEvents.handle_error`
            event specifically provides for exceptions to be re-thrown as
            the ultimate exception raised by the failed statement,
            **stack traces will be misleading** if the user-defined event
@@ -405,7 +412,7 @@ class ConnectionEvents(event.Events):
          class for details on all available members.
 
         .. versionadded:: 0.9.7 Added the
-            :meth:`.ConnectionEvents.handle_error` hook.
+            :meth:`_events.ConnectionEvents.handle_error` hook.
 
         .. versionchanged:: 1.1 The :meth:`.handle_error` event will now
            receive all exceptions that inherit from ``BaseException``,
@@ -416,9 +423,9 @@ class ConnectionEvents(event.Events):
            ``False``.
 
         .. versionchanged:: 1.0.0 The :meth:`.handle_error` event is now
-           invoked when an :class:`.Engine` fails during the initial
-           call to :meth:`.Engine.connect`, as well as when a
-           :class:`.Connection` object encounters an error during a
+           invoked when an :class:`_engine.Engine` fails during the initial
+           call to :meth:`_engine.Engine.connect`, as well as when a
+           :class:`_engine.Connection` object encounters an error during a
            reconnect operation.
 
         .. versionchanged:: 1.0.0 The :meth:`.handle_error` event is
@@ -434,32 +441,39 @@ class ConnectionEvents(event.Events):
         """
 
     def engine_connect(self, conn, branch):
-        """Intercept the creation of a new :class:`.Connection`.
+        """Intercept the creation of a new :class:`_engine.Connection`.
 
         This event is called typically as the direct result of calling
-        the :meth:`.Engine.connect` method.
+        the :meth:`_engine.Engine.connect` method.
 
-        It differs from the :meth:`.PoolEvents.connect` method, which
+        It differs from the :meth:`_events.PoolEvents.connect` method, which
         refers to the actual connection to a database at the DBAPI level;
         a DBAPI connection may be pooled and reused for many operations.
         In contrast, this event refers only to the production of a higher level
-        :class:`.Connection` wrapper around such a DBAPI connection.
+        :class:`_engine.Connection` wrapper around such a DBAPI connection.
 
-        It also differs from the :meth:`.PoolEvents.checkout` event
-        in that it is specific to the :class:`.Connection` object, not the
-        DBAPI connection that :meth:`.PoolEvents.checkout` deals with, although
+        It also differs from the :meth:`_events.PoolEvents.checkout` event
+        in that it is specific to the :class:`_engine.Connection` object,
+        not the
+        DBAPI connection that :meth:`_events.PoolEvents.checkout` deals with,
+        although
         this DBAPI connection is available here via the
-        :attr:`.Connection.connection` attribute.  But note there can in fact
-        be multiple :meth:`.PoolEvents.checkout` events within the lifespan
-        of a single :class:`.Connection` object, if that :class:`.Connection`
+        :attr:`_engine.Connection.connection` attribute.
+        But note there can in fact
+        be multiple :meth:`_events.PoolEvents.checkout`
+        events within the lifespan
+        of a single :class:`_engine.Connection` object, if that
+        :class:`_engine.Connection`
         is invalidated and re-established.  There can also be multiple
-        :class:`.Connection` objects generated for the same already-checked-out
-        DBAPI connection, in the case that a "branch" of a :class:`.Connection`
+        :class:`_engine.Connection`
+        objects generated for the same already-checked-out
+        DBAPI connection, in the case that a "branch" of a
+        :class:`_engine.Connection`
         is produced.
 
-        :param conn: :class:`.Connection` object.
+        :param conn: :class:`_engine.Connection` object.
         :param branch: if True, this is a "branch" of an existing
-         :class:`.Connection`.  A branch is generated within the course
+         :class:`_engine.Connection`.  A branch is generated within the course
          of a statement execution to invoke supplemental statements, most
          typically to pre-execute a SELECT of a default value for the purposes
          of an INSERT statement.
@@ -469,85 +483,99 @@ class ConnectionEvents(event.Events):
         .. seealso::
 
             :ref:`pool_disconnects_pessimistic` - illustrates how to use
-            :meth:`.ConnectionEvents.engine_connect`
+            :meth:`_events.ConnectionEvents.engine_connect`
             to transparently ensure pooled connections are connected to the
             database.
 
-            :meth:`.PoolEvents.checkout` the lower-level pool checkout event
+            :meth:`_events.PoolEvents.checkout`
+            the lower-level pool checkout event
             for an individual DBAPI connection
 
-            :meth:`.ConnectionEvents.set_connection_execution_options` - a copy
-            of a :class:`.Connection` is also made when the
-            :meth:`.Connection.execution_options` method is called.
+            :meth:`_events.ConnectionEvents.set_connection_execution_options`
+            - a copy
+            of a :class:`_engine.Connection` is also made when the
+            :meth:`_engine.Connection.execution_options` method is called.
 
         """
 
     def set_connection_execution_options(self, conn, opts):
-        """Intercept when the :meth:`.Connection.execution_options`
+        """Intercept when the :meth:`_engine.Connection.execution_options`
         method is called.
 
-        This method is called after the new :class:`.Connection` has been
+        This method is called after the new :class:`_engine.Connection`
+        has been
         produced, with the newly updated execution options collection, but
         before the :class:`.Dialect` has acted upon any of those new options.
 
-        Note that this method is not called when a new :class:`.Connection`
+        Note that this method is not called when a new
+        :class:`_engine.Connection`
         is produced which is inheriting execution options from its parent
-        :class:`.Engine`; to intercept this condition, use the
-        :meth:`.ConnectionEvents.engine_connect` event.
+        :class:`_engine.Engine`; to intercept this condition, use the
+        :meth:`_events.ConnectionEvents.engine_connect` event.
 
-        :param conn: The newly copied :class:`.Connection` object
+        :param conn: The newly copied :class:`_engine.Connection` object
 
         :param opts: dictionary of options that were passed to the
-         :meth:`.Connection.execution_options` method.
+         :meth:`_engine.Connection.execution_options` method.
 
         .. versionadded:: 0.9.0
 
         .. seealso::
 
-            :meth:`.ConnectionEvents.set_engine_execution_options` - event
-            which is called when :meth:`.Engine.execution_options` is called.
+            :meth:`_events.ConnectionEvents.set_engine_execution_options`
+            - event
+            which is called when :meth:`_engine.Engine.execution_options`
+            is called.
 
 
         """
 
     def set_engine_execution_options(self, engine, opts):
-        """Intercept when the :meth:`.Engine.execution_options`
+        """Intercept when the :meth:`_engine.Engine.execution_options`
         method is called.
 
-        The :meth:`.Engine.execution_options` method produces a shallow
-        copy of the :class:`.Engine` which stores the new options.  That new
-        :class:`.Engine` is passed here.   A particular application of this
-        method is to add a :meth:`.ConnectionEvents.engine_connect` event
-        handler to the given :class:`.Engine` which will perform some per-
-        :class:`.Connection` task specific to these execution options.
+        The :meth:`_engine.Engine.execution_options` method produces a shallow
+        copy of the :class:`_engine.Engine` which stores the new options.
+        That new
+        :class:`_engine.Engine` is passed here.
+        A particular application of this
+        method is to add a :meth:`_events.ConnectionEvents.engine_connect`
+        event
+        handler to the given :class:`_engine.Engine`
+        which will perform some per-
+        :class:`_engine.Connection` task specific to these execution options.
 
-        :param conn: The newly copied :class:`.Engine` object
+        :param conn: The newly copied :class:`_engine.Engine` object
 
         :param opts: dictionary of options that were passed to the
-         :meth:`.Connection.execution_options` method.
+         :meth:`_engine.Connection.execution_options` method.
 
         .. versionadded:: 0.9.0
 
         .. seealso::
 
-            :meth:`.ConnectionEvents.set_connection_execution_options` - event
-            which is called when :meth:`.Connection.execution_options` is
+            :meth:`_events.ConnectionEvents.set_connection_execution_options`
+            - event
+            which is called when :meth:`_engine.Connection.execution_options`
+            is
             called.
 
         """
 
     def engine_disposed(self, engine):
-        """Intercept when the :meth:`.Engine.dispose` method is called.
+        """Intercept when the :meth:`_engine.Engine.dispose` method is called.
 
-        The :meth:`.Engine.dispose` method instructs the engine to
-        "dispose" of it's connection pool (e.g. :class:`.Pool`), and
+        The :meth:`_engine.Engine.dispose` method instructs the engine to
+        "dispose" of it's connection pool (e.g. :class:`_pool.Pool`), and
         replaces it with a new one.  Disposing of the old pool has the
         effect that existing checked-in connections are closed.  The new
         pool does not establish any new connections until it is first used.
 
         This event can be used to indicate that resources related to the
-        :class:`.Engine` should also be cleaned up, keeping in mind that the
-        :class:`.Engine` can still be used for new requests in which case
+        :class:`_engine.Engine` should also be cleaned up,
+        keeping in mind that the
+        :class:`_engine.Engine`
+        can still be used for new requests in which case
         it re-acquires connection resources.
 
         .. versionadded:: 1.0.5
@@ -557,7 +585,7 @@ class ConnectionEvents(event.Events):
     def begin(self, conn):
         """Intercept begin() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
 
         """
 
@@ -565,17 +593,17 @@ class ConnectionEvents(event.Events):
         """Intercept rollback() events, as initiated by a
         :class:`.Transaction`.
 
-        Note that the :class:`.Pool` also "auto-rolls back"
+        Note that the :class:`_pool.Pool` also "auto-rolls back"
         a DBAPI connection upon checkin, if the ``reset_on_return``
         flag is set to its default value of ``'rollback'``.
         To intercept this
-        rollback, use the :meth:`.PoolEvents.reset` hook.
+        rollback, use the :meth:`_events.PoolEvents.reset` hook.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
 
         .. seealso::
 
-            :meth:`.PoolEvents.reset`
+            :meth:`_events.PoolEvents.reset`
 
         """
 
@@ -583,18 +611,18 @@ class ConnectionEvents(event.Events):
         """Intercept commit() events, as initiated by a
         :class:`.Transaction`.
 
-        Note that the :class:`.Pool` may also "auto-commit"
+        Note that the :class:`_pool.Pool` may also "auto-commit"
         a DBAPI connection upon checkin, if the ``reset_on_return``
         flag is set to the value ``'commit'``.  To intercept this
-        commit, use the :meth:`.PoolEvents.reset` hook.
+        commit, use the :meth:`_events.PoolEvents.reset` hook.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         """
 
     def savepoint(self, conn, name):
         """Intercept savepoint() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param name: specified name used for the savepoint.
 
         """
@@ -602,25 +630,27 @@ class ConnectionEvents(event.Events):
     def rollback_savepoint(self, conn, name, context):
         """Intercept rollback_savepoint() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param name: specified name used for the savepoint.
-        :param context: :class:`.ExecutionContext` in use.  May be ``None``.
+        :param context: not used
 
         """
+        # TODO: deprecate "context"
 
     def release_savepoint(self, conn, name, context):
         """Intercept release_savepoint() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param name: specified name used for the savepoint.
-        :param context: :class:`.ExecutionContext` in use.  May be ``None``.
+        :param context: not used
 
         """
+        # TODO: deprecate "context"
 
     def begin_twophase(self, conn, xid):
         """Intercept begin_twophase() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param xid: two-phase XID identifier
 
         """
@@ -628,14 +658,14 @@ class ConnectionEvents(event.Events):
     def prepare_twophase(self, conn, xid):
         """Intercept prepare_twophase() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param xid: two-phase XID identifier
         """
 
     def rollback_twophase(self, conn, xid, is_prepared):
         """Intercept rollback_twophase() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param xid: two-phase XID identifier
         :param is_prepared: boolean, indicates if
          :meth:`.TwoPhaseTransaction.prepare` was called.
@@ -645,7 +675,7 @@ class ConnectionEvents(event.Events):
     def commit_twophase(self, conn, xid, is_prepared):
         """Intercept commit_twophase() events.
 
-        :param conn: :class:`.Connection` object
+        :param conn: :class:`_engine.Connection` object
         :param xid: two-phase XID identifier
         :param is_prepared: boolean, indicates if
          :meth:`.TwoPhaseTransaction.prepare` was called.
@@ -666,17 +696,17 @@ class DialectEvents(event.Events):
         These hooks are not for general use and are only for those situations
         where intricate re-statement of DBAPI mechanics must be injected onto
         an existing dialect.  For general-use statement-interception events,
-        please use the :class:`.ConnectionEvents` interface.
+        please use the :class:`_events.ConnectionEvents` interface.
 
     .. seealso::
 
-        :meth:`.ConnectionEvents.before_cursor_execute`
+        :meth:`_events.ConnectionEvents.before_cursor_execute`
 
-        :meth:`.ConnectionEvents.before_execute`
+        :meth:`_events.ConnectionEvents.before_execute`
 
-        :meth:`.ConnectionEvents.after_cursor_execute`
+        :meth:`_events.ConnectionEvents.after_cursor_execute`
 
-        :meth:`.ConnectionEvents.after_execute`
+        :meth:`_events.ConnectionEvents.after_execute`
 
 
     .. versionadded:: 0.9.4
@@ -719,6 +749,10 @@ class DialectEvents(event.Events):
         arguments.
 
         .. versionadded:: 1.0.3
+
+        .. seealso::
+
+            :ref:`custom_dbapi_args`
 
         """
 

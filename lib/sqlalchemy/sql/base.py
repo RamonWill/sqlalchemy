@@ -15,11 +15,14 @@ import operator
 import re
 
 from .traversals import HasCacheKey  # noqa
+from .traversals import MemoizedHasCacheKey  # noqa
 from .visitors import ClauseVisitor
+from .visitors import ExtendedInternalTraversal
 from .visitors import InternalTraversal
 from .. import exc
 from .. import util
 from ..util import HasMemoized
+from ..util import hybridmethod
 
 if util.TYPE_CHECKING:
     from types import ModuleType
@@ -433,21 +436,57 @@ class CompileState(object):
 
     __slots__ = ("statement",)
 
+    plugins = {}
+
     @classmethod
-    def _create(cls, statement, compiler, **kw):
+    def create_for_statement(cls, statement, compiler, **kw):
         # factory construction.
 
-        # specific CompileState classes here will look for
-        # "plugins" in the given statement.  From there they will invoke
-        # the appropriate plugin constructor if one is found and return
-        # the alternate CompileState object.
+        if statement._propagate_attrs:
+            plugin_name = statement._propagate_attrs.get(
+                "compile_state_plugin", "default"
+            )
+            klass = cls.plugins.get(
+                (plugin_name, statement.__visit_name__), None
+            )
+            if klass is None:
+                klass = cls.plugins[("default", statement.__visit_name__)]
 
-        c = cls.__new__(cls)
-        c.__init__(statement, compiler, **kw)
-        return c
+        else:
+            klass = cls.plugins[("default", statement.__visit_name__)]
+
+        if klass is cls:
+            return cls(statement, compiler, **kw)
+        else:
+            return klass.create_for_statement(statement, compiler, **kw)
 
     def __init__(self, statement, compiler, **kw):
         self.statement = statement
+
+    @classmethod
+    def get_plugin_class(cls, statement):
+        plugin_name = statement._propagate_attrs.get(
+            "compile_state_plugin", "default"
+        )
+        try:
+            return cls.plugins[(plugin_name, statement.__visit_name__)]
+        except KeyError:
+            return None
+
+    @classmethod
+    def _get_plugin_class_for_plugin(cls, statement, plugin_name):
+        try:
+            return cls.plugins[(plugin_name, statement.__visit_name__)]
+        except KeyError:
+            return None
+
+    @classmethod
+    def plugin_for(cls, plugin_name, visit_name):
+        def decorate(cls_to_decorate):
+            cls.plugins[(plugin_name, visit_name)] = cls_to_decorate
+            return cls_to_decorate
+
+        return decorate
 
 
 class Generative(HasMemoized):
@@ -461,12 +500,114 @@ class Generative(HasMemoized):
         return s
 
 
+class InPlaceGenerative(HasMemoized):
+    """Provide a method-chaining pattern in conjunction with the
+    @_generative decorator taht mutates in place."""
+
+    def _generate(self):
+        skip = self._memoized_keys
+        for k in skip:
+            self.__dict__.pop(k, None)
+        return self
+
+
 class HasCompileState(Generative):
     """A class that has a :class:`.CompileState` associated with it."""
 
-    _compile_state_factory = CompileState._create
-
     _compile_state_plugin = None
+
+    _attributes = util.immutabledict()
+
+    _compile_state_factory = CompileState.create_for_statement
+
+
+class _MetaOptions(type):
+    """metaclass for the Options class."""
+
+    def __init__(cls, classname, bases, dict_):
+        cls._cache_attrs = tuple(
+            sorted(
+                d
+                for d in dict_
+                if not d.startswith("__")
+                and d not in ("_cache_key_traversal",)
+            )
+        )
+        type.__init__(cls, classname, bases, dict_)
+
+    def __add__(self, other):
+        o1 = self()
+        o1.__dict__.update(other)
+        return o1
+
+
+class Options(util.with_metaclass(_MetaOptions)):
+    """A cacheable option dictionary with defaults.
+
+
+    """
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def __add__(self, other):
+        o1 = self.__class__.__new__(self.__class__)
+        o1.__dict__.update(self.__dict__)
+        o1.__dict__.update(other)
+        return o1
+
+    @hybridmethod
+    def add_to_element(self, name, value):
+        return self + {name: getattr(self, name) + value}
+
+    @hybridmethod
+    def _state_dict(self):
+        return self.__dict__
+
+    _state_dict_const = util.immutabledict()
+
+    @_state_dict.classlevel
+    def _state_dict(cls):
+        return cls._state_dict_const
+
+    @classmethod
+    def safe_merge(cls, other):
+        d = other._state_dict()
+
+        # only support a merge with another object of our class
+        # and which does not have attrs that we dont.   otherwise
+        # we risk having state that might not be part of our cache
+        # key strategy
+
+        if (
+            cls is not other.__class__
+            and other._cache_attrs
+            and set(other._cache_attrs).difference(cls._cache_attrs)
+        ):
+            raise TypeError(
+                "other element %r is not empty, is not of type %s, "
+                "and contains attributes not covered here %r"
+                % (
+                    other,
+                    cls,
+                    set(other._cache_attrs).difference(cls._cache_attrs),
+                )
+            )
+        return cls + d
+
+
+class CacheableOptions(Options, HasCacheKey):
+    @hybridmethod
+    def _gen_cache_key(self, anon_map, bindparams):
+        return HasCacheKey._gen_cache_key(self, anon_map, bindparams)
+
+    @_gen_cache_key.classlevel
+    def _gen_cache_key(cls, anon_map, bindparams):
+        return (cls, ())
+
+    @hybridmethod
+    def _generate_cache_key(self):
+        return HasCacheKey._generate_cache_key_for_object(self)
 
 
 class Executable(Generative):
@@ -481,7 +622,16 @@ class Executable(Generative):
     supports_execution = True
     _execution_options = util.immutabledict()
     _bind = None
+    _with_options = ()
+    _with_context_options = ()
 
+    _executable_traverse_internals = [
+        ("_with_options", ExtendedInternalTraversal.dp_has_cache_key_list),
+        ("_with_context_options", ExtendedInternalTraversal.dp_plain_obj),
+        ("_propagate_attrs", ExtendedInternalTraversal.dp_propagate_attrs),
+    ]
+
+    @_generative
     def options(self, *options):
         """Apply options to this statement.
 
@@ -511,7 +661,21 @@ class Executable(Generative):
             to the usage of ORM queries
 
         """
-        self._options += options
+        self._with_options += options
+
+    @_generative
+    def _add_context_option(self, callable_, cache_args):
+        """Add a context option to this statement.
+
+        These are callable functions that will
+        be given the CompileState object upon compilation.
+
+        A second argument cache_args is required, which will be combined
+        with the identity of the function itself in order to produce a
+        cache key.
+
+        """
+        self._with_context_options += ((callable_, cache_args),)
 
     @_generative
     def execution_options(self, **kw):
@@ -519,8 +683,9 @@ class Executable(Generative):
         execution.
 
         Execution options can be set on a per-statement or
-        per :class:`.Connection` basis.   Additionally, the
-        :class:`.Engine` and ORM :class:`~.orm.query.Query` objects provide
+        per :class:`_engine.Connection` basis.   Additionally, the
+        :class:`_engine.Engine` and ORM :class:`~.orm.query.Query`
+        objects provide
         access to execution options which they in turn configure upon
         connections.
 
@@ -533,14 +698,14 @@ class Executable(Generative):
         Note that only a subset of possible execution options can be applied
         to a statement - these include "autocommit" and "stream_results",
         but not "isolation_level" or "compiled_cache".
-        See :meth:`.Connection.execution_options` for a full list of
+        See :meth:`_engine.Connection.execution_options` for a full list of
         possible options.
 
         .. seealso::
 
-            :meth:`.Connection.execution_options`
+            :meth:`_engine.Connection.execution_options`
 
-            :meth:`.Query.execution_options`
+            :meth:`_query.Query.execution_options`
 
             :meth:`.Executable.get_execution_options`
 
@@ -573,12 +738,15 @@ class Executable(Generative):
     @util.deprecated_20(
         ":meth:`.Executable.execute`",
         alternative="All statement execution in SQLAlchemy 2.0 is performed "
-        "by the :meth:`.Connection.execute` method of :class:`.Connection`, "
+        "by the :meth:`_engine.Connection.execute` method of "
+        ":class:`_engine.Connection`, "
         "or in the ORM by the :meth:`.Session.execute` method of "
         ":class:`.Session`.",
     )
     def execute(self, *multiparams, **params):
-        """Compile and execute this :class:`.Executable`."""
+        """Compile and execute this :class:`.Executable`.
+
+        """
         e = self.bind
         if e is None:
             label = getattr(self, "description", self.__class__.__name__)
@@ -588,14 +756,18 @@ class Executable(Generative):
                 "to execute this construct." % label
             )
             raise exc.UnboundExecutionError(msg)
-        return e._execute_clauseelement(self, multiparams, params)
+        return e._execute_clauseelement(
+            self, multiparams, params, util.immutabledict()
+        )
 
     @util.deprecated_20(
         ":meth:`.Executable.scalar`",
         alternative="All statement execution in SQLAlchemy 2.0 is performed "
-        "by the :meth:`.Connection.execute` method of :class:`.Connection`, "
+        "by the :meth:`_engine.Connection.execute` method of "
+        ":class:`_engine.Connection`, "
         "or in the ORM by the :meth:`.Session.execute` method of "
-        ":class:`.Session`; the :meth:`.Result.scalar` method can then be "
+        ":class:`.Session`; the :meth:`_future.Result.scalar` "
+        "method can then be "
         "used to return a scalar result.",
     )
     def scalar(self, *multiparams, **params):
@@ -607,7 +779,8 @@ class Executable(Generative):
 
     @property
     def bind(self):
-        """Returns the :class:`.Engine` or :class:`.Connection` to
+        """Returns the :class:`_engine.Engine` or :class:`_engine.Connection`
+        to
         which this :class:`.Executable` is bound, or None if none found.
 
         This is a traversal which checks locally, then
@@ -673,14 +846,19 @@ class SchemaVisitor(ClauseVisitor):
 
 
 class ColumnCollection(object):
-    """Collection of :class:`.ColumnElement` instances, typically for
+    """Collection of :class:`_expression.ColumnElement` instances,
+    typically for
     selectables.
 
-    The :class:`.ColumnCollection` has both mapping- and sequence- like
-    behaviors.   A :class:`.ColumnCollection` usually stores :class:`.Column`
+    The :class:`_expression.ColumnCollection`
+    has both mapping- and sequence- like
+    behaviors.   A :class:`_expression.ColumnCollection` usually stores
+    :class:`_schema.Column`
     objects, which are then accessible both via mapping style access as well
-    as attribute access style.  The name for which a :class:`.Column` would
-    be present is normally that of the :paramref:`.Column.key` parameter,
+    as attribute access style.  The name for which a :class:`_schema.Column`
+    would
+    be present is normally that of the :paramref:`_schema.Column.key`
+    parameter,
     however depending on the context, it may be stored under a special label
     name::
 
@@ -704,7 +882,8 @@ class ColumnCollection(object):
         >>> cc[1]
         Column('y', Integer(), table=None)
 
-    .. versionadded:: 1.4 :class:`.ColumnCollection` allows integer-based
+    .. versionadded:: 1.4 :class:`_expression.ColumnCollection`
+       allows integer-based
        index access to the collection.
 
     Iterating the collection yields the column expressions in order::
@@ -713,7 +892,8 @@ class ColumnCollection(object):
         [Column('x', Integer(), table=None),
          Column('y', Integer(), table=None)]
 
-    The base :class:`.ColumnCollection` object can store duplicates, which can
+    The base :class:`_expression.ColumnCollection` object can store duplicates
+    , which can
     mean either two columns with the same key, in which case the column
     returned by key  access is **arbitrary**::
 
@@ -728,18 +908,21 @@ class ColumnCollection(object):
         True
 
     Or it can also mean the same column multiple times.   These cases are
-    supported as :class:`.ColumnCollection` is used to represent the columns in
+    supported as :class:`_expression.ColumnCollection`
+    is used to represent the columns in
     a SELECT statement which may include duplicates.
 
     A special subclass :class:`.DedupeColumnCollection` exists which instead
     maintains SQLAlchemy's older behavior of not allowing duplicates; this
-    collection is used for schema level objects like :class:`.Table` and
+    collection is used for schema level objects like :class:`_schema.Table`
+    and
     :class:`.PrimaryKeyConstraint` where this deduping is helpful.  The
     :class:`.DedupeColumnCollection` class also has additional mutation methods
     as the schema constructs have more use cases that require removal and
     replacement of columns.
 
-    .. versionchanged:: 1.4 :class:`.ColumnCollection` now stores duplicate
+    .. versionchanged:: 1.4 :class:`_expression.ColumnCollection`
+       now stores duplicate
        column keys as well as the same column in multiple positions.  The
        :class:`.DedupeColumnCollection` class is added to maintain the
        former behavior in those cases where deduplication as well as
@@ -882,28 +1065,34 @@ class ColumnCollection(object):
         return ImmutableColumnCollection(self)
 
     def corresponding_column(self, column, require_embedded=False):
-        """Given a :class:`.ColumnElement`, return the exported
-        :class:`.ColumnElement` object from this :class:`.ColumnCollection`
-        which corresponds to that original :class:`.ColumnElement` via a common
+        """Given a :class:`_expression.ColumnElement`, return the exported
+        :class:`_expression.ColumnElement` object from this
+        :class:`_expression.ColumnCollection`
+        which corresponds to that original :class:`_expression.ColumnElement`
+        via a common
         ancestor column.
 
-        :param column: the target :class:`.ColumnElement` to be matched
+        :param column: the target :class:`_expression.ColumnElement`
+                      to be matched
 
         :param require_embedded: only return corresponding columns for
-         the given :class:`.ColumnElement`, if the given
-         :class:`.ColumnElement` is actually present within a sub-element
-         of this :class:`.Selectable`.  Normally the column will match if
+         the given :class:`_expression.ColumnElement`, if the given
+         :class:`_expression.ColumnElement`
+         is actually present within a sub-element
+         of this :class:`expression.Selectable`.
+         Normally the column will match if
          it merely shares a common ancestor with one of the exported
-         columns of this :class:`.Selectable`.
+         columns of this :class:`expression.Selectable`.
 
         .. seealso::
 
-            :meth:`.Selectable.corresponding_column` - invokes this method
+            :meth:`expression.Selectable.corresponding_column`
+            - invokes this method
             against the collection returned by
-            :attr:`.Selectable.exported_columns`.
+            :attr:`expression.Selectable.exported_columns`.
 
         .. versionchanged:: 1.4 the implementation for ``corresponding_column``
-           was moved onto the :class:`.ColumnCollection` itself.
+           was moved onto the :class:`_expression.ColumnCollection` itself.
 
         """
 
@@ -974,9 +1163,10 @@ class ColumnCollection(object):
 
 
 class DedupeColumnCollection(ColumnCollection):
-    """A :class:`.ColumnCollection` that maintains deduplicating behavior.
+    """A :class:`_expression.ColumnCollection`
+    that maintains deduplicating behavior.
 
-    This is useful by schema level objects such as :class:`.Table` and
+    This is useful by schema level objects such as :class:`_schema.Table` and
     :class:`.PrimaryKeyConstraint`.    The collection includes more
     sophisticated mutator methods as well to suit schema objects which
     require mutable column collections.

@@ -75,10 +75,10 @@ class InstancesTest(_fixtures.FixtureTest):
 
         ctx = q._compile_context()
         cursor = mock.Mock()
-        q._entities = [
+        ctx.compile_state._entities = [
             mock.Mock(row_processor=mock.Mock(side_effect=Exception("boom")))
         ]
-        assert_raises(Exception, list, loading.instances(q, cursor, ctx))
+        assert_raises(Exception, loading.instances, cursor, ctx)
         assert cursor.close.called, "Cursor wasn't closed"
 
     def test_row_proc_not_created(self):

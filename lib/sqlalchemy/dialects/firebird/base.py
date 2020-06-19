@@ -12,9 +12,14 @@ r"""
 
 .. note::
 
-    The Firebird dialect within SQLAlchemy **is not currently supported**. The
-    dialect is not tested within continuous integration and is likely to have
-    many issues and caveats not currently handled.
+    The Firebird dialect within SQLAlchemy **is not currently supported**.
+    It is not tested within continuous integration and is likely to have
+    many issues and caveats not currently handled. Consider using the
+    `external dialect <https://github.com/pauldex/sqlalchemy-firebird>`_
+    instead.
+
+.. deprecated:: 1.4 The internal Firebird dialect is deprecated and will be
+   removed in a future version. Use the external dialect.
 
 Firebird Dialects
 -----------------
@@ -45,12 +50,12 @@ of hanging transactions is a non-fully consumed result set, i.e.::
     row = result.fetchone()
     return
 
-Where above, the ``ResultProxy`` has not been fully consumed.  The
+Where above, the ``CursorResult`` has not been fully consumed.  The
 connection will be returned to the pool and the transactional state
 rolled back once the Python garbage collector reclaims the objects
 which hold onto the connection, which often occurs asynchronously.
 The above use case can be alleviated by calling ``first()`` on the
-``ResultProxy`` which will fetch the first row and immediately close
+``CursorResult`` which will fetch the first row and immediately close
 all remaining cursor/connection resources.
 
 RETURNING support
@@ -73,7 +78,6 @@ the SQLAlchemy ``returning()`` method, such as::
 
 
 .. _dialects: http://mc-computing.com/Databases/Firebird/SQL_Dialect.html
-
 """
 
 import datetime
@@ -525,8 +529,7 @@ class FBCompiler(sql.compiler.SQLCompiler):
             result += "FIRST %s " % self.process(select._limit_clause, **kw)
         if select._offset_clause is not None:
             result += "SKIP %s " % self.process(select._offset_clause, **kw)
-        if select._distinct:
-            result += "DISTINCT "
+        result += super(FBCompiler, self).get_select_precolumns(select, **kw)
         return result
 
     def limit_clause(self, select, **kw):
@@ -648,6 +651,15 @@ class FBDialect(default.DefaultDialect):
     # will be autodetected off upon
     # first connect
     _version_two = True
+
+    def __init__(self, *args, **kwargs):
+        util.warn_deprecated(
+            "The firebird dialect is deprecated and will be removed "
+            "in a future version. This dialect is superseded by the external "
+            "dialect https://github.com/pauldex/sqlalchemy-firebird.",
+            version="1.4",
+        )
+        super(FBDialect, self).__init__(*args, **kwargs)
 
     def initialize(self, connection):
         super(FBDialect, self).initialize(connection)

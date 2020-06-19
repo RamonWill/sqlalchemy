@@ -585,18 +585,24 @@ class DefaultRequirements(SuiteRequirements):
     @property
     def ctes(self):
         """Target database supports CTEs"""
-
         return only_on(
             [
                 lambda config: against(config, "mysql")
                 and (
-                    config.db.dialect._is_mariadb
-                    and config.db.dialect._mariadb_normalized_version_info
-                    >= (10, 2)
+                    (
+                        config.db.dialect._is_mariadb
+                        and config.db.dialect._mariadb_normalized_version_info
+                        >= (10, 2)
+                    )
+                    or (
+                        not config.db.dialect._is_mariadb
+                        and config.db.dialect.server_version_info >= (8,)
+                    )
                 ),
                 "postgresql",
                 "mssql",
                 "oracle",
+                "sqlite>=3.8.3",
             ]
         )
 
@@ -714,7 +720,7 @@ class DefaultRequirements(SuiteRequirements):
 
         def pg_prepared_transaction(config):
             if not against(config, "postgresql"):
-                return False
+                return True
 
             with config.db.connect() as conn:
                 try:
@@ -737,19 +743,19 @@ class DefaultRequirements(SuiteRequirements):
                     "oracle", "two-phase xact not implemented in SQLA/oracle"
                 ),
                 no_support(
-                    "drizzle", "two-phase xact not supported by database"
-                ),
-                no_support(
                     "sqlite", "two-phase xact not supported by database"
                 ),
                 no_support(
                     "sybase", "two-phase xact not supported by drivers/SQLA"
                 ),
-                no_support(
-                    "mysql",
-                    "recent MySQL communiity editions have too many issues "
-                    "(late 2016), disabling for now",
-                ),
+                # in Ia3cbbf56d4882fcc7980f90519412f1711fae74d
+                # we are evaluating which modern MySQL / MariaDB versions
+                # can handle two-phase testing without too many problems
+                # no_support(
+                #     "mysql",
+                #    "recent MySQL communiity editions have too many issues "
+                #    "(late 2016), disabling for now",
+                # ),
                 NotPredicate(
                     LambdaPredicate(
                         pg_prepared_transaction,
@@ -762,7 +768,9 @@ class DefaultRequirements(SuiteRequirements):
     @property
     def two_phase_recovery(self):
         return self.two_phase_transactions + (
-            skip_if("mysql", "crashes on most mariadb and mysql versions")
+            skip_if(
+                "mysql", "still can't get recover to work w/ MariaDB / MySQL"
+            )
         )
 
     @property
@@ -786,7 +794,9 @@ class DefaultRequirements(SuiteRequirements):
         """target database can persist/return an empty string with an
         unbounded text."""
 
-        return exclusions.open()
+        return fails_if(
+            ["oracle"], "oracle converts empty strings to a blank space"
+        )
 
     @property
     def expressions_against_unbounded_text(self):
@@ -1374,6 +1384,10 @@ class DefaultRequirements(SuiteRequirements):
         return only_on(["mssql+pymssql"])
 
     @property
+    def legacy_engine(self):
+        return exclusions.skip_if(lambda config: config.db._is_future)
+
+    @property
     def ad_hoc_engines(self):
         return exclusions.skip_if(
             ["oracle"],
@@ -1586,7 +1600,7 @@ class DefaultRequirements(SuiteRequirements):
 
     @property
     def computed_columns(self):
-        return skip_if(["postgresql < 12", "sqlite", "mysql < 5.7"])
+        return skip_if(["postgresql < 12", "sqlite < 3.31", "mysql < 5.7"])
 
     @property
     def python_profiling_backend(self):
@@ -1607,3 +1621,27 @@ class DefaultRequirements(SuiteRequirements):
     @property
     def computed_columns_reflect_persisted(self):
         return self.computed_columns + skip_if("oracle")
+
+    @property
+    def supports_distinct_on(self):
+        """If a backend supports the DISTINCT ON in a select"""
+        return only_if(["postgresql"])
+
+    @property
+    def supports_for_update_of(self):
+        return only_if(lambda config: config.db.dialect.supports_for_update_of)
+
+    @property
+    def sequences_in_other_clauses(self):
+        """sequences allowed in WHERE, GROUP BY, HAVING, etc."""
+        return skip_if(["mssql", "oracle"])
+
+    @property
+    def supports_lastrowid_for_expressions(self):
+        """sequences allowed in WHERE, GROUP BY, HAVING, etc."""
+        return skip_if("mssql")
+
+    @property
+    def supports_sequence_for_autoincrement_column(self):
+        """for mssql, autoincrement means IDENTITY, not sequence"""
+        return skip_if("mssql")

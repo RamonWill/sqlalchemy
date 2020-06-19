@@ -12,6 +12,7 @@ import sys
 from .interfaces import Connectable
 from .interfaces import ExceptionContext
 from .util import _distill_params
+from .util import _distill_params_20
 from .. import exc
 from .. import inspection
 from .. import log
@@ -20,16 +21,19 @@ from ..sql import compiler
 from ..sql import util as sql_util
 
 
-"""Defines :class:`.Connection` and :class:`.Engine`.
+"""Defines :class:`_engine.Connection` and :class:`_engine.Engine`.
 
 """
+
+_EMPTY_EXECUTION_OPTS = util.immutabledict()
 
 
 class Connection(Connectable):
     """Provides high-level functionality for a wrapped DB-API connection.
 
     Provides execution support for string-based SQL statements as well as
-    :class:`.ClauseElement`, :class:`.Compiled` and :class:`.DefaultGenerator`
+    :class:`_expression.ClauseElement`, :class:`.Compiled` and
+    :class:`.DefaultGenerator`
     objects. Provides a :meth:`begin` method to return :class:`.Transaction`
     objects.
 
@@ -50,7 +54,8 @@ class Connection(Connectable):
 
     """
 
-    _schema_translate_map = None
+    _is_future = False
+    _sqla_logger_namespace = "sqlalchemy.engine.Connection"
 
     def __init__(
         self,
@@ -68,27 +73,27 @@ class Connection(Connectable):
         self.engine = engine
         self.dialect = engine.dialect
         self.__branch_from = _branch_from
-        self.__branch = _branch_from is not None
 
         if _branch_from:
-            self.__connection = connection
+            # branching is always "from" the root connection
+            assert _branch_from.__branch_from is None
+            self._dbapi_connection = connection
             self._execution_options = _execution_options
             self._echo = _branch_from._echo
             self.should_close_with_result = False
             self.dispatch = _dispatch
             self._has_events = _branch_from._has_events
-            self._schema_translate_map = _branch_from._schema_translate_map
         else:
-            self.__connection = (
+            self._dbapi_connection = (
                 connection
                 if connection is not None
                 else engine.raw_connection()
             )
-            self.__transaction = None
+            self._transaction = self._nested_transaction = None
             self.__savepoint_seq = 0
+            self.__in_begin = False
             self.should_close_with_result = close_with_result
 
-            self.__invalid = False
             self.__can_reconnect = True
             self._echo = self.engine._should_log_info()
 
@@ -105,7 +110,11 @@ class Connection(Connectable):
             self._execution_options = engine._execution_options
 
         if self._has_events or self.engine._has_events:
-            self.dispatch.engine_connect(self, self.__branch)
+            self.dispatch.engine_connect(self, _branch_from is not None)
+
+    @property
+    def _schema_translate_map(self):
+        return self._execution_options.get("schema_translate_map", None)
 
     def schema_for_object(self, obj):
         """return the schema name for the given schema item taking into
@@ -114,7 +123,9 @@ class Connection(Connectable):
         """
 
         name = obj.schema
-        schema_translate_map = self._schema_translate_map
+        schema_translate_map = self._execution_options.get(
+            "schema_translate_map", None
+        )
 
         if (
             schema_translate_map
@@ -130,6 +141,10 @@ class Connection(Connectable):
         engine and connection; but does not have close_with_result enabled,
         and also whose close() method does nothing.
 
+        .. deprecated:: 1.4 the "branching" concept will be removed in
+           SQLAlchemy 2.0 as well as the "Connection.connect()" method which
+           is the only consumer for this.
+
         The Core uses this very sparingly, only in the case of
         custom SQL default functions that are to be INSERTed as the
         primary key of a row where we need to get the value back, so we have
@@ -141,39 +156,24 @@ class Connection(Connectable):
         connected when a close() event occurs.
 
         """
-        if self.__branch_from:
-            return self.__branch_from._branch()
-        else:
-            return self.engine._connection_cls(
-                self.engine,
-                self.__connection,
-                _branch_from=self,
-                _execution_options=self._execution_options,
-                _has_events=self._has_events,
-                _dispatch=self.dispatch,
-            )
+        return self.engine._connection_cls(
+            self.engine,
+            self._dbapi_connection,
+            _branch_from=self.__branch_from if self.__branch_from else self,
+            _execution_options=self._execution_options,
+            _has_events=self._has_events,
+            _dispatch=self.dispatch,
+        )
 
-    @property
-    def _root(self):
-        """return the 'root' connection.
+    def _generate_for_options(self):
+        """define connection method chaining behavior for execution_options"""
 
-        Returns 'self' if this connection is not a branch, else
-        returns the root connection from which we ultimately branched.
-
-        """
-
-        if self.__branch_from:
-            return self.__branch_from
-        else:
+        if self._is_future:
             return self
-
-    def _clone(self):
-        """Create a shallow copy of this Connection.
-
-        """
-        c = self.__class__.__new__(self.__class__)
-        c.__dict__ = self.__dict__.copy()
-        return c
+        else:
+            c = self.__class__.__new__(self.__class__)
+            c.__dict__ = self.__dict__.copy()
+            return c
 
     def __enter__(self):
         return self
@@ -185,10 +185,12 @@ class Connection(Connectable):
         r""" Set non-SQL options for the connection which take effect
         during execution.
 
-        The method returns a copy of this :class:`.Connection` which references
+        The method returns a copy of this :class:`_engine.Connection`
+        which references
         the same underlying DBAPI connection, but also defines the given
         execution options which will take effect for a call to
-        :meth:`execute`. As the new :class:`.Connection` references the same
+        :meth:`execute`. As the new :class:`_engine.Connection`
+        references the same
         underlying resource, it's usually a good idea to ensure that the copies
         will be discarded immediately, which is implicit if used as in::
 
@@ -196,14 +198,16 @@ class Connection(Connectable):
                                 execute(stmt)
 
         Note that any key/value can be passed to
-        :meth:`.Connection.execution_options`, and it will be stored in the
-        ``_execution_options`` dictionary of the :class:`.Connection`.   It
+        :meth:`_engine.Connection.execution_options`,
+        and it will be stored in the
+        ``_execution_options`` dictionary of the :class:`_engine.Connection`.
+        It
         is suitable for usage by end-user schemes to communicate with
         event listeners, for example.
 
         The keywords that are currently recognized by SQLAlchemy itself
         include all those listed under :meth:`.Executable.execution_options`,
-        as well as others that are specific to :class:`.Connection`.
+        as well as others that are specific to :class:`_engine.Connection`.
 
         :param autocommit: Available on: Connection, statement.
           When True, a COMMIT will be invoked after execution
@@ -221,62 +225,63 @@ class Connection(Connectable):
 
         :param compiled_cache: Available on: Connection.
           A dictionary where :class:`.Compiled` objects
-          will be cached when the :class:`.Connection` compiles a clause
-          expression into a :class:`.Compiled` object.
-          It is the user's responsibility to
-          manage the size of this dictionary, which will have keys
-          corresponding to the dialect, clause element, the column
-          names within the VALUES or SET clause of an INSERT or UPDATE,
-          as well as the "batch" mode for an INSERT or UPDATE statement.
-          The format of this dictionary is not guaranteed to stay the
-          same in future releases.
+          will be cached when the :class:`_engine.Connection`
+          compiles a clause
+          expression into a :class:`.Compiled` object.  This dictionary will
+          supersede the statement cache that may be configured on the
+          :class:`_engine.Engine` itself.   If set to None, caching
+          is disabled, even if the engine has a configured cache size.
 
           Note that the ORM makes use of its own "compiled" caches for
           some operations, including flush operations.  The caching
           used by the ORM internally supersedes a cache dictionary
           specified here.
 
-        :param isolation_level: Available on: :class:`.Connection`.
+        :param isolation_level: Available on: :class:`_engine.Connection`.
 
           Set the transaction isolation level for the lifespan of this
-          :class:`.Connection` object.    Valid values include those string
-          values accepted by the :paramref:`.create_engine.isolation_level`
-          parameter passed to :func:`.create_engine`.  These levels are
+          :class:`_engine.Connection` object.
+          Valid values include those string
+          values accepted by the :paramref:`_sa.create_engine.isolation_level`
+          parameter passed to :func:`_sa.create_engine`.  These levels are
           semi-database specific; see individual dialect documentation for
           valid levels.
 
           The isolation level option applies the isolation level by emitting
           statements on the  DBAPI connection, and **necessarily affects the
           original Connection object overall**, not just the copy that is
-          returned by the call to :meth:`.Connection.execution_options`
+          returned by the call to :meth:`_engine.Connection.execution_options`
           method.  The isolation level will remain at the given setting until
           the DBAPI connection itself is returned to the connection pool, i.e.
-          the :meth:`.Connection.close` method on the original
-          :class:`.Connection` is called, where  an event handler will emit
+          the :meth:`_engine.Connection.close` method on the original
+          :class:`_engine.Connection` is called,
+          where  an event handler will emit
           additional statements on the DBAPI connection in order to revert the
           isolation level change.
 
           .. warning::  The ``isolation_level`` execution option should
              **not** be used when a transaction is already established, that
-             is, the :meth:`.Connection.begin` method or similar has been
+             is, the :meth:`_engine.Connection.begin`
+             method or similar has been
              called.  A database cannot change the isolation level on a
              transaction in progress, and different DBAPIs and/or
              SQLAlchemy dialects may implicitly roll back or commit
              the transaction, or not affect the connection at all.
 
           .. note:: The ``isolation_level`` execution option is implicitly
-             reset if the :class:`.Connection` is invalidated, e.g. via
-             the :meth:`.Connection.invalidate` method, or if a
+             reset if the :class:`_engine.Connection` is invalidated, e.g. via
+             the :meth:`_engine.Connection.invalidate` method, or if a
              disconnection error occurs.  The new connection produced after
              the invalidation will not have the isolation level re-applied
              to it automatically.
 
           .. seealso::
 
-                :paramref:`.create_engine.isolation_level`
-                - set per :class:`.Engine` isolation level
+                :paramref:`_sa.create_engine.isolation_level`
+                - set per :class:`_engine.Engine` isolation level
 
-                :meth:`.Connection.get_isolation_level` - view current level
+                :meth:`_engine.Connection.get_isolation_level`
+                - view current level
 
                 :ref:`SQLite Transaction Isolation <sqlite_isolation_level>`
 
@@ -308,8 +313,9 @@ class Connection(Connectable):
 
         :param schema_translate_map: Available on: Connection, Engine.
           A dictionary mapping schema names to schema names, that will be
-          applied to the :paramref:`.Table.schema` element of each
-          :class:`.Table` encountered when SQL or DDL expression elements
+          applied to the :paramref:`_schema.Table.schema` element of each
+          :class:`_schema.Table`
+          encountered when SQL or DDL expression elements
           are compiled into strings; the resulting schema name will be
           converted based on presence in the map of the original name.
 
@@ -321,15 +327,15 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Engine.execution_options`
+            :meth:`_engine.Engine.execution_options`
 
             :meth:`.Executable.execution_options`
 
-            :meth:`.Connection.get_execution_options`
+            :meth:`_engine.Connection.get_execution_options`
 
 
         """  # noqa
-        c = self._clone()
+        c = self._generate_for_options()
         c._execution_options = c._execution_options.union(opt)
         if self._has_events or self.engine._has_events:
             self.dispatch.set_connection_execution_options(c, opt)
@@ -343,7 +349,7 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Connection.execution_options`
+            :meth:`_engine.Connection.execution_options`
         """
         return self._execution_options
 
@@ -351,16 +357,28 @@ class Connection(Connectable):
     def closed(self):
         """Return True if this connection is closed."""
 
-        return (
-            "_Connection__connection" not in self.__dict__
-            and not self.__can_reconnect
-        )
+        # note this is independent for a "branched" connection vs.
+        # the base
+
+        return self._dbapi_connection is None and not self.__can_reconnect
 
     @property
     def invalidated(self):
         """Return True if this connection was invalidated."""
 
-        return self._root.__invalid
+        # prior to 1.4, "invalid" was stored as a state independent of
+        # "closed", meaning an invalidated connection could be "closed",
+        # the _dbapi_connection would be None and closed=True, yet the
+        # "invalid" flag would stay True.  This meant that there were
+        # three separate states (open/valid, closed/valid, closed/invalid)
+        # when there is really no reason for that; a connection that's
+        # "closed" does not need to be "invalid".  So the state is now
+        # represented by the two facts alone.
+
+        if self.__branch_from:
+            return self.__branch_from.invalidated
+
+        return self._dbapi_connection is None and not self.closed
 
     @property
     def connection(self):
@@ -373,32 +391,31 @@ class Connection(Connectable):
 
         """
 
-        try:
-            return self.__connection
-        except AttributeError:
-            # escape "except AttributeError" before revalidating
-            # to prevent misleading stacktraces in Py3K
-            pass
-        try:
-            return self._revalidate_connection()
-        except BaseException as e:
-            self._handle_dbapi_exception(e, None, None, None, None)
+        if self._dbapi_connection is None:
+            try:
+                return self._revalidate_connection()
+            except (exc.PendingRollbackError, exc.ResourceClosedError):
+                raise
+            except BaseException as e:
+                self._handle_dbapi_exception(e, None, None, None, None)
+        else:
+            return self._dbapi_connection
 
     def get_isolation_level(self):
         """Return the current isolation level assigned to this
-        :class:`.Connection`.
+        :class:`_engine.Connection`.
 
         This will typically be the default isolation level as determined
         by the dialect, unless if the
         :paramref:`.Connection.execution_options.isolation_level`
         feature has been used to alter the isolation level on a
-        per-:class:`.Connection` basis.
+        per-:class:`_engine.Connection` basis.
 
         This attribute will typically perform a live SQL operation in order
         to procure the current isolation level, so the value returned is the
         actual level on the underlying DBAPI connection regardless of how
         this state was set.  Compare to the
-        :attr:`.Connection.default_isolation_level` accessor
+        :attr:`_engine.Connection.default_isolation_level` accessor
         which returns the dialect-level setting without performing a SQL
         query.
 
@@ -406,13 +423,14 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :attr:`.Connection.default_isolation_level` - view default level
+            :attr:`_engine.Connection.default_isolation_level`
+            - view default level
 
-            :paramref:`.create_engine.isolation_level`
-            - set per :class:`.Engine` isolation level
+            :paramref:`_sa.create_engine.isolation_level`
+            - set per :class:`_engine.Engine` isolation level
 
             :paramref:`.Connection.execution_options.isolation_level`
-            - set per :class:`.Connection` isolation level
+            - set per :class:`_engine.Connection` isolation level
 
         """
         try:
@@ -422,15 +440,18 @@ class Connection(Connectable):
 
     @property
     def default_isolation_level(self):
-        """The default isolation level assigned to this :class:`.Connection`.
+        """The default isolation level assigned to this
+        :class:`_engine.Connection`.
 
-        This is the isolation level setting that the :class:`.Connection`
-        has when first procured via the :meth:`.Engine.connect` method.
+        This is the isolation level setting that the
+        :class:`_engine.Connection`
+        has when first procured via the :meth:`_engine.Engine.connect` method.
         This level stays in place until the
         :paramref:`.Connection.execution_options.isolation_level` is used
-        to change the setting on a per-:class:`.Connection` basis.
+        to change the setting on a per-:class:`_engine.Connection` basis.
 
-        Unlike :meth:`.Connection.get_isolation_level`, this attribute is set
+        Unlike :meth:`_engine.Connection.get_isolation_level`,
+        this attribute is set
         ahead of time from the first connection procured by the dialect,
         so SQL query is not invoked when this accessor is called.
 
@@ -438,56 +459,69 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Connection.get_isolation_level` - view current level
+            :meth:`_engine.Connection.get_isolation_level`
+            - view current level
 
-            :paramref:`.create_engine.isolation_level`
-            - set per :class:`.Engine` isolation level
+            :paramref:`_sa.create_engine.isolation_level`
+            - set per :class:`_engine.Engine` isolation level
 
             :paramref:`.Connection.execution_options.isolation_level`
-            - set per :class:`.Connection` isolation level
+            - set per :class:`_engine.Connection` isolation level
 
         """
         return self.dialect.default_isolation_level
 
+    def _invalid_transaction(self):
+        if self.invalidated:
+            raise exc.PendingRollbackError(
+                "Can't reconnect until invalid %stransaction is rolled "
+                "back."
+                % (
+                    "savepoint "
+                    if self._nested_transaction is not None
+                    else ""
+                ),
+                code="8s2b",
+            )
+        else:
+            raise exc.PendingRollbackError(
+                "This connection is on an inactive %stransaction.  "
+                "Please rollback() fully before proceeding."
+                % (
+                    "savepoint "
+                    if self._nested_transaction is not None
+                    else ""
+                ),
+                code="8s2a",
+            )
+
     def _revalidate_connection(self):
         if self.__branch_from:
             return self.__branch_from._revalidate_connection()
-        if self.__can_reconnect and self.__invalid:
-            if self.__transaction is not None:
-                raise exc.InvalidRequestError(
-                    "Can't reconnect until invalid "
-                    "transaction is rolled back"
-                )
-            self.__connection = self.engine.raw_connection(_connection=self)
-            self.__invalid = False
-            return self.__connection
+        if self.__can_reconnect and self.invalidated:
+            if self._transaction is not None:
+                self._invalid_transaction()
+            self._dbapi_connection = self.engine.raw_connection(
+                _connection=self
+            )
+            return self._dbapi_connection
         raise exc.ResourceClosedError("This Connection is closed")
 
     @property
-    def _connection_is_valid(self):
-        # use getattr() for is_valid to support exceptions raised in
-        # dialect initializer, where the connection is not wrapped in
-        # _ConnectionFairy
-
-        return getattr(self.__connection, "is_valid", False)
-
-    @property
-    def _still_open_and_connection_is_valid(self):
-        return (
-            not self.closed
-            and not self.invalidated
-            and getattr(self.__connection, "is_valid", False)
+    def _still_open_and_dbapi_connection_is_valid(self):
+        return self._dbapi_connection is not None and getattr(
+            self._dbapi_connection, "is_valid", False
         )
 
     @property
     def info(self):
         """Info dictionary associated with the underlying DBAPI connection
-        referred to by this :class:`.Connection`, allowing user-defined
+        referred to by this :class:`_engine.Connection`, allowing user-defined
         data to be associated with the connection.
 
         The data here will follow along with the DBAPI connection including
         after it is returned to the connection pool and used again
-        in subsequent instances of :class:`.Connection`.
+        in subsequent instances of :class:`_engine.Connection`.
 
         """
 
@@ -495,14 +529,14 @@ class Connection(Connectable):
 
     @util.deprecated_20(":meth:`.Connection.connect`")
     def connect(self, close_with_result=False):
-        """Returns a branched version of this :class:`.Connection`.
+        """Returns a branched version of this :class:`_engine.Connection`.
 
-        The :meth:`.Connection.close` method on the returned
-        :class:`.Connection` can be called and this
-        :class:`.Connection` will remain open.
+        The :meth:`_engine.Connection.close` method on the returned
+        :class:`_engine.Connection` can be called and this
+        :class:`_engine.Connection` will remain open.
 
         This method provides usage symmetry with
-        :meth:`.Engine.connect`, including for usage
+        :meth:`_engine.Engine.connect`, including for usage
         with context managers.
 
         """
@@ -511,36 +545,38 @@ class Connection(Connectable):
 
     def invalidate(self, exception=None):
         """Invalidate the underlying DBAPI connection associated with
-        this :class:`.Connection`.
+        this :class:`_engine.Connection`.
 
         The underlying DBAPI connection is literally closed (if
         possible), and is discarded.  Its source connection pool will
         typically lazily create a new connection to replace it.
 
         Upon the next use (where "use" typically means using the
-        :meth:`.Connection.execute` method or similar),
-        this :class:`.Connection` will attempt to
+        :meth:`_engine.Connection.execute` method or similar),
+        this :class:`_engine.Connection` will attempt to
         procure a new DBAPI connection using the services of the
-        :class:`.Pool` as a source of connectivity (e.g. a "reconnection").
+        :class:`_pool.Pool` as a source of connectivity (e.g.
+        a "reconnection").
 
         If a transaction was in progress (e.g. the
-        :meth:`.Connection.begin` method has been called) when
-        :meth:`.Connection.invalidate` method is called, at the DBAPI
+        :meth:`_engine.Connection.begin` method has been called) when
+        :meth:`_engine.Connection.invalidate` method is called, at the DBAPI
         level all state associated with this transaction is lost, as
-        the DBAPI connection is closed.  The :class:`.Connection`
+        the DBAPI connection is closed.  The :class:`_engine.Connection`
         will not allow a reconnection to proceed until the
         :class:`.Transaction` object is ended, by calling the
         :meth:`.Transaction.rollback` method; until that point, any attempt at
-        continuing to use the :class:`.Connection` will raise an
+        continuing to use the :class:`_engine.Connection` will raise an
         :class:`~sqlalchemy.exc.InvalidRequestError`.
         This is to prevent applications from accidentally
         continuing an ongoing transactional operations despite the
         fact that the transaction has been lost due to an
         invalidation.
 
-        The :meth:`.Connection.invalidate` method, just like auto-invalidation,
+        The :meth:`_engine.Connection.invalidate` method,
+        just like auto-invalidation,
         will at the connection pool level invoke the
-        :meth:`.PoolEvents.invalidate` event.
+        :meth:`_events.PoolEvents.invalidate` event.
 
         .. seealso::
 
@@ -548,16 +584,18 @@ class Connection(Connectable):
 
         """
 
+        if self.__branch_from:
+            return self.__branch_from.invalidate(exception=exception)
+
         if self.invalidated:
             return
 
         if self.closed:
             raise exc.ResourceClosedError("This Connection is closed")
 
-        if self._root._connection_is_valid:
-            self._root.__connection.invalidate(exception)
-        del self._root.__connection
-        self._root.__invalid = True
+        if self._still_open_and_dbapi_connection_is_valid:
+            self._dbapi_connection.invalidate(exception)
+        self._dbapi_connection = None
 
     def detach(self):
         """Detach the underlying DB-API connection from its connection pool.
@@ -573,7 +611,8 @@ class Connection(Connectable):
             # connection is fully closed (since we used "with:", can
             # also call .close())
 
-        This :class:`.Connection` instance will remain usable.  When closed
+        This :class:`_engine.Connection` instance will remain usable.
+        When closed
         (or exited from a context manager context as above),
         the DB-API connection will be literally closed and not
         returned to its originating pool.
@@ -584,7 +623,7 @@ class Connection(Connectable):
 
         """
 
-        self.__connection.detach()
+        self._dbapi_connection.detach()
 
     def begin(self):
         """Begin a transaction and return a transaction handle.
@@ -594,7 +633,7 @@ class Connection(Connectable):
         which completes when either the :meth:`.Transaction.rollback`
         or :meth:`.Transaction.commit` method is called.
 
-        Nested calls to :meth:`.begin` on the same :class:`.Connection`
+        Nested calls to :meth:`.begin` on the same :class:`_engine.Connection`
         will return new :class:`.Transaction` objects that represent
         an emulated transaction within the scope of the enclosing
         transaction, that is::
@@ -612,23 +651,37 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Connection.begin_nested` - use a SAVEPOINT
+            :meth:`_engine.Connection.begin_nested` - use a SAVEPOINT
 
-            :meth:`.Connection.begin_twophase` -
+            :meth:`_engine.Connection.begin_twophase` -
             use a two phase /XID transaction
 
-            :meth:`.Engine.begin` - context manager available from
-            :class:`.Engine`
+            :meth:`_engine.Engine.begin` - context manager available from
+            :class:`_engine.Engine`
 
         """
-        if self.__branch_from:
+        if self._is_future:
+            assert not self.__branch_from
+        elif self.__branch_from:
             return self.__branch_from.begin()
 
-        if self.__transaction is None:
-            self.__transaction = RootTransaction(self)
-            return self.__transaction
+        if self.__in_begin:
+            # for dialects that emit SQL within the process of
+            # dialect.do_begin() or dialect.do_begin_twophase(), this
+            # flag prevents "autobegin" from being emitted within that
+            # process, while allowing self._transaction to remain at None
+            # until it's complete.
+            return
+        elif self._transaction is None:
+            self._transaction = RootTransaction(self)
+            return self._transaction
         else:
-            return Transaction(self, self.__transaction)
+            if self._is_future:
+                raise exc.InvalidRequestError(
+                    "a transaction is already begun for this connection"
+                )
+            else:
+                return MarkerTransaction(self)
 
     def begin_nested(self):
         """Begin a nested transaction and return a transaction handle.
@@ -643,19 +696,20 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Connection.begin`
+            :meth:`_engine.Connection.begin`
 
-            :meth:`.Connection.begin_twophase`
+            :meth:`_engine.Connection.begin_twophase`
 
         """
-        if self.__branch_from:
+        if self._is_future:
+            assert not self.__branch_from
+        elif self.__branch_from:
             return self.__branch_from.begin_nested()
 
-        if self.__transaction is None:
-            self.__transaction = RootTransaction(self)
-        else:
-            self.__transaction = NestedTransaction(self, self.__transaction)
-        return self.__transaction
+        if self._transaction is None:
+            self.begin()
+
+        return NestedTransaction(self)
 
     def begin_twophase(self, xid=None):
         """Begin a two-phase or XA transaction and return a transaction
@@ -671,24 +725,23 @@ class Connection(Connectable):
 
         .. seealso::
 
-            :meth:`.Connection.begin`
+            :meth:`_engine.Connection.begin`
 
-            :meth:`.Connection.begin_twophase`
+            :meth:`_engine.Connection.begin_twophase`
 
         """
 
         if self.__branch_from:
             return self.__branch_from.begin_twophase(xid=xid)
 
-        if self.__transaction is not None:
+        if self._transaction is not None:
             raise exc.InvalidRequestError(
                 "Cannot start a two phase transaction when a transaction "
                 "is already in progress."
             )
         if xid is None:
             xid = self.engine.dialect.create_xid()
-        self.__transaction = TwoPhaseTransaction(self, xid)
-        return self.__transaction
+        return TwoPhaseTransaction(self, xid)
 
     def recover_twophase(self):
         return self.engine.dialect.do_recover_twophase(self)
@@ -701,10 +754,10 @@ class Connection(Connectable):
 
     def in_transaction(self):
         """Return True if a transaction is in progress."""
-        return (
-            self._root.__transaction is not None
-            and self._root.__transaction.is_active
-        )
+        if self.__branch_from is not None:
+            return self.__branch_from.in_transaction()
+
+        return self._transaction is not None and self._transaction.is_active
 
     def _begin_impl(self, transaction):
         assert not self.__branch_from
@@ -715,32 +768,27 @@ class Connection(Connectable):
         if self._has_events or self.engine._has_events:
             self.dispatch.begin(self)
 
+        self.__in_begin = True
         try:
             self.engine.dialect.do_begin(self.connection)
-            if self.connection._reset_agent is None:
-                self.connection._reset_agent = transaction
         except BaseException as e:
             self._handle_dbapi_exception(e, None, None, None, None)
+        finally:
+            self.__in_begin = False
 
-    def _rollback_impl(self, deactivate_only=False):
+    def _rollback_impl(self):
         assert not self.__branch_from
 
         if self._has_events or self.engine._has_events:
             self.dispatch.rollback(self)
 
-        if self._still_open_and_connection_is_valid:
+        if self._still_open_and_dbapi_connection_is_valid:
             if self._echo:
                 self.engine.logger.info("ROLLBACK")
             try:
                 self.engine.dialect.do_rollback(self.connection)
             except BaseException as e:
                 self._handle_dbapi_exception(e, None, None, None, None)
-            finally:
-                if (
-                    not self.__invalid
-                    and self.connection._reset_agent is self.__transaction
-                ):
-                    self.connection._reset_agent = None
 
     def _commit_impl(self, autocommit=False):
         assert not self.__branch_from
@@ -754,13 +802,6 @@ class Connection(Connectable):
             self.engine.dialect.do_commit(self.connection)
         except BaseException as e:
             self._handle_dbapi_exception(e, None, None, None, None)
-        finally:
-            if (
-                not self.__invalid
-                and self.connection._reset_agent is self.__transaction
-            ):
-                self.connection._reset_agent = None
-            self.__transaction = None
 
     def _savepoint_impl(self, name=None):
         assert not self.__branch_from
@@ -771,39 +812,27 @@ class Connection(Connectable):
         if name is None:
             self.__savepoint_seq += 1
             name = "sa_savepoint_%s" % self.__savepoint_seq
-        if self._still_open_and_connection_is_valid:
+        if self._still_open_and_dbapi_connection_is_valid:
             self.engine.dialect.do_savepoint(self, name)
             return name
 
-    def _discard_transaction(self, trans):
-        if trans is self.__transaction:
-            if trans._is_root:
-                assert trans._parent is trans
-                self.__transaction = None
-            else:
-                assert trans._parent is not trans
-                self.__transaction = trans._parent
-
-    def _rollback_to_savepoint_impl(
-        self, name, context, deactivate_only=False
-    ):
+    def _rollback_to_savepoint_impl(self, name):
         assert not self.__branch_from
 
         if self._has_events or self.engine._has_events:
-            self.dispatch.rollback_savepoint(self, name, context)
+            self.dispatch.rollback_savepoint(self, name, None)
 
-        if self._still_open_and_connection_is_valid:
+        if self._still_open_and_dbapi_connection_is_valid:
             self.engine.dialect.do_rollback_to_savepoint(self, name)
 
-    def _release_savepoint_impl(self, name, context):
+    def _release_savepoint_impl(self, name):
         assert not self.__branch_from
 
         if self._has_events or self.engine._has_events:
-            self.dispatch.release_savepoint(self, name, context)
+            self.dispatch.release_savepoint(self, name, None)
 
-        if self._still_open_and_connection_is_valid:
+        if self._still_open_and_dbapi_connection_is_valid:
             self.engine.dialect.do_release_savepoint(self, name)
-        self.__transaction = context
 
     def _begin_twophase_impl(self, transaction):
         assert not self.__branch_from
@@ -813,11 +842,14 @@ class Connection(Connectable):
         if self._has_events or self.engine._has_events:
             self.dispatch.begin_twophase(self, transaction.xid)
 
-        if self._still_open_and_connection_is_valid:
-            self.engine.dialect.do_begin_twophase(self, transaction.xid)
-
-            if self.connection._reset_agent is None:
-                self.connection._reset_agent = transaction
+        if self._still_open_and_dbapi_connection_is_valid:
+            self.__in_begin = True
+            try:
+                self.engine.dialect.do_begin_twophase(self, transaction.xid)
+            except BaseException as e:
+                self._handle_dbapi_exception(e, None, None, None, None)
+            finally:
+                self.__in_begin = False
 
     def _prepare_twophase_impl(self, xid):
         assert not self.__branch_from
@@ -825,9 +857,12 @@ class Connection(Connectable):
         if self._has_events or self.engine._has_events:
             self.dispatch.prepare_twophase(self, xid)
 
-        if self._still_open_and_connection_is_valid:
-            assert isinstance(self.__transaction, TwoPhaseTransaction)
-            self.engine.dialect.do_prepare_twophase(self, xid)
+        if self._still_open_and_dbapi_connection_is_valid:
+            assert isinstance(self._transaction, TwoPhaseTransaction)
+            try:
+                self.engine.dialect.do_prepare_twophase(self, xid)
+            except BaseException as e:
+                self._handle_dbapi_exception(e, None, None, None, None)
 
     def _rollback_twophase_impl(self, xid, is_prepared):
         assert not self.__branch_from
@@ -835,18 +870,14 @@ class Connection(Connectable):
         if self._has_events or self.engine._has_events:
             self.dispatch.rollback_twophase(self, xid, is_prepared)
 
-        if self._still_open_and_connection_is_valid:
-            assert isinstance(self.__transaction, TwoPhaseTransaction)
+        if self._still_open_and_dbapi_connection_is_valid:
+            assert isinstance(self._transaction, TwoPhaseTransaction)
             try:
                 self.engine.dialect.do_rollback_twophase(
                     self, xid, is_prepared
                 )
-            finally:
-                if self.connection._reset_agent is self.__transaction:
-                    self.connection._reset_agent = None
-                self.__transaction = None
-        else:
-            self.__transaction = None
+            except BaseException as e:
+                self._handle_dbapi_exception(e, None, None, None, None)
 
     def _commit_twophase_impl(self, xid, is_prepared):
         assert not self.__branch_from
@@ -854,72 +885,67 @@ class Connection(Connectable):
         if self._has_events or self.engine._has_events:
             self.dispatch.commit_twophase(self, xid, is_prepared)
 
-        if self._still_open_and_connection_is_valid:
-            assert isinstance(self.__transaction, TwoPhaseTransaction)
+        if self._still_open_and_dbapi_connection_is_valid:
+            assert isinstance(self._transaction, TwoPhaseTransaction)
             try:
                 self.engine.dialect.do_commit_twophase(self, xid, is_prepared)
-            finally:
-                if self.connection._reset_agent is self.__transaction:
-                    self.connection._reset_agent = None
-                self.__transaction = None
-        else:
-            self.__transaction = None
+            except BaseException as e:
+                self._handle_dbapi_exception(e, None, None, None, None)
 
     def _autorollback(self):
-        if not self._root.in_transaction():
-            self._root._rollback_impl()
+        if self.__branch_from:
+            self.__branch_from._autorollback()
+
+        if not self.in_transaction():
+            self._rollback_impl()
 
     def close(self):
-        """Close this :class:`.Connection`.
+        """Close this :class:`_engine.Connection`.
 
         This results in a release of the underlying database
         resources, that is, the DBAPI connection referenced
         internally. The DBAPI connection is typically restored
-        back to the connection-holding :class:`.Pool` referenced
-        by the :class:`.Engine` that produced this
-        :class:`.Connection`. Any transactional state present on
+        back to the connection-holding :class:`_pool.Pool` referenced
+        by the :class:`_engine.Engine` that produced this
+        :class:`_engine.Connection`. Any transactional state present on
         the DBAPI connection is also unconditionally released via
         the DBAPI connection's ``rollback()`` method, regardless
         of any :class:`.Transaction` object that may be
-        outstanding with regards to this :class:`.Connection`.
+        outstanding with regards to this :class:`_engine.Connection`.
 
-        After :meth:`~.Connection.close` is called, the
-        :class:`.Connection` is permanently in a closed state,
+        After :meth:`_engine.Connection.close` is called, the
+        :class:`_engine.Connection` is permanently in a closed state,
         and will allow no further operations.
 
         """
+
         if self.__branch_from:
+            assert not self._is_future
             util.warn_deprecated_20(
                 "The .close() method on a so-called 'branched' connection is "
                 "deprecated as of 1.4, as are 'branched' connections overall, "
                 "and will be removed in a future release.  If this is a "
                 "default-handling function, don't close the connection."
             )
+            self._dbapi_connection = None
+            self.__can_reconnect = False
+            return
 
-            try:
-                del self.__connection
-            except AttributeError:
-                pass
-            finally:
-                self.__can_reconnect = False
-                return
-        try:
-            conn = self.__connection
-        except AttributeError:
-            pass
-        else:
+        if self._transaction:
+            self._transaction.close()
 
+        if self._dbapi_connection is not None:
+            conn = self._dbapi_connection
             conn.close()
-            if conn._reset_agent is self.__transaction:
+            if conn._reset_agent is self._transaction:
                 conn._reset_agent = None
 
-            # the close() process can end up invalidating us,
-            # as the pool will call our transaction as the "reset_agent"
-            # for rollback(), which can then cause an invalidation
-            if not self.__invalid:
-                del self.__connection
+            # There is a slight chance that conn.close() may have
+            # triggered an invalidation here in which case
+            # _dbapi_connection would already be None, however usually
+            # it will be non-None here and in a "closed" state.
+            self._dbapi_connection = None
         self.__can_reconnect = False
-        self.__transaction = None
 
     def scalar(self, object_, *multiparams, **params):
         """Executes and returns the first column of the first row.
@@ -931,15 +957,15 @@ class Connection(Connectable):
 
     def execute(self, object_, *multiparams, **params):
         r"""Executes a SQL statement construct and returns a
-        :class:`.ResultProxy`.
+        :class:`_engine.CursorResult`.
 
         :param object: The statement to be executed.  May be
          one of:
 
          * a plain string (deprecated)
-         * any :class:`.ClauseElement` construct that is also
+         * any :class:`_expression.ClauseElement` construct that is also
            a subclass of :class:`.Executable`, such as a
-           :func:`~.expression.select` construct
+           :func:`_expression.select` construct
          * a :class:`.FunctionElement`, such as that generated
            by :data:`.func`, will be automatically wrapped in
            a SELECT statement, which is then executed.
@@ -947,11 +973,13 @@ class Connection(Connectable):
          * a :class:`.DefaultGenerator` object
          * a :class:`.Compiled` object
 
-         .. deprecated:: 2.0 passing a string to :meth:`.Connection.execute` is
+         .. deprecated:: 2.0 passing a string to
+            :meth:`_engine.Connection.execute` is
             deprecated and will be removed in version 2.0.  Use the
-            :func:`~.expression.text` construct with
-            :meth:`.Connection.execute`, or the
-            :meth:`.Connection.exec_driver_sql` method to invoke a driver-level
+            :func:`_expression.text` construct with
+            :meth:`_engine.Connection.execute`, or the
+            :meth:`_engine.Connection.exec_driver_sql`
+            method to invoke a driver-level
             SQL string.
 
         :param \*multiparams/\**params: represent bound parameter
@@ -992,7 +1020,7 @@ class Connection(Connectable):
          for details on paramstyle.
 
          To execute a textual SQL statement which uses bound parameters in a
-         DBAPI-agnostic way, use the :func:`~.expression.text` construct.
+         DBAPI-agnostic way, use the :func:`_expression.text` construct.
 
          .. deprecated:: 2.0 use of tuple or scalar positional parameters
             is deprecated. All params should be dicts or sequences of dicts.
@@ -1009,8 +1037,15 @@ class Connection(Connectable):
                 "or the Connection.exec_driver_sql() method to invoke a "
                 "driver-level SQL string."
             )
-            distilled_params = _distill_params(multiparams, params)
-            return self._exec_driver_sql_distilled(object_, distilled_params)
+            distilled_parameters = _distill_params(multiparams, params)
+
+            return self._exec_driver_sql(
+                object_,
+                multiparams,
+                params,
+                distilled_parameters,
+                _EMPTY_EXECUTION_OPTS,
+            )
         try:
             meth = object_._execute_on_connection
         except AttributeError as err:
@@ -1018,34 +1053,46 @@ class Connection(Connectable):
                 exc.ObjectNotExecutableError(object_), replace_context=err
             )
         else:
-            return meth(self, multiparams, params)
+            return meth(self, multiparams, params, _EMPTY_EXECUTION_OPTS)
 
-    def _execute_function(self, func, multiparams, params):
+    def _execute_function(self, func, multiparams, params, execution_options):
         """Execute a sql.FunctionElement object."""
 
-        return self._execute_clauseelement(func.select(), multiparams, params)
+        return self._execute_clauseelement(
+            func.select(), multiparams, params, execution_options
+        )
 
-    def _execute_default(self, default, multiparams, params):
+    def _execute_default(
+        self,
+        default,
+        multiparams,
+        params,
+        # migrate is calling this directly :(
+        execution_options=_EMPTY_EXECUTION_OPTS,
+    ):
         """Execute a schema.ColumnDefault object."""
+
+        execution_options = self._execution_options.merge_with(
+            execution_options
+        )
 
         if self._has_events or self.engine._has_events:
             for fn in self.dispatch.before_execute:
                 default, multiparams, params = fn(
-                    self, default, multiparams, params
+                    self, default, multiparams, params, execution_options
                 )
 
         try:
-            try:
-                conn = self.__connection
-            except AttributeError:
-                # escape "except AttributeError" before revalidating
-                # to prevent misleading stacktraces in Py3K
-                conn = None
+            conn = self._dbapi_connection
             if conn is None:
                 conn = self._revalidate_connection()
 
             dialect = self.dialect
-            ctx = dialect.execution_ctx_cls._init_default(dialect, self, conn)
+            ctx = dialect.execution_ctx_cls._init_default(
+                dialect, self, conn, execution_options
+            )
+        except (exc.PendingRollbackError, exc.ResourceClosedError):
+            raise
         except BaseException as e:
             self._handle_dbapi_exception(e, None, None, None, None)
 
@@ -1055,106 +1102,129 @@ class Connection(Connectable):
 
         if self._has_events or self.engine._has_events:
             self.dispatch.after_execute(
-                self, default, multiparams, params, ret
+                self, default, multiparams, params, execution_options, ret
             )
 
         return ret
 
-    def _execute_ddl(self, ddl, multiparams, params):
+    def _execute_ddl(self, ddl, multiparams, params, execution_options):
         """Execute a schema.DDL object."""
+
+        execution_options = ddl._execution_options.merge_with(
+            self._execution_options, execution_options
+        )
 
         if self._has_events or self.engine._has_events:
             for fn in self.dispatch.before_execute:
-                ddl, multiparams, params = fn(self, ddl, multiparams, params)
+                ddl, multiparams, params = fn(
+                    self, ddl, multiparams, params, execution_options
+                )
+
+        exec_opts = self._execution_options.merge_with(execution_options)
+        schema_translate_map = exec_opts.get("schema_translate_map", None)
 
         dialect = self.dialect
 
         compiled = ddl.compile(
-            dialect=dialect, schema_translate_map=self._schema_translate_map
+            dialect=dialect, schema_translate_map=schema_translate_map
         )
         ret = self._execute_context(
             dialect,
             dialect.execution_ctx_cls._init_ddl,
             compiled,
             None,
+            execution_options,
             compiled,
         )
         if self._has_events or self.engine._has_events:
-            self.dispatch.after_execute(self, ddl, multiparams, params, ret)
+            self.dispatch.after_execute(
+                self, ddl, multiparams, params, execution_options, ret
+            )
         return ret
 
-    def _execute_clauseelement(self, elem, multiparams, params):
+    def _execute_clauseelement(
+        self, elem, multiparams, params, execution_options
+    ):
         """Execute a sql.ClauseElement object."""
 
-        if self._has_events or self.engine._has_events:
+        execution_options = elem._execution_options.merge_with(
+            self._execution_options, execution_options
+        )
+
+        has_events = self._has_events or self.engine._has_events
+        if has_events:
             for fn in self.dispatch.before_execute:
-                elem, multiparams, params = fn(self, elem, multiparams, params)
+                elem, multiparams, params = fn(
+                    self, elem, multiparams, params, execution_options
+                )
 
         distilled_params = _distill_params(multiparams, params)
         if distilled_params:
             # ensure we don't retain a link to the view object for keys()
             # which links to the values, which we don't want to cache
-            keys = list(distilled_params[0].keys())
+            keys = sorted(distilled_params[0])
+            inline = len(distilled_params) > 1
         else:
             keys = []
+            inline = False
 
         dialect = self.dialect
 
-        if "compiled_cache" in self._execution_options:
-            elem_cache_key, extracted_params = elem._generate_cache_key()
-            key = (
-                dialect,
-                elem_cache_key,
-                tuple(sorted(keys)),
-                bool(self._schema_translate_map),
-                len(distilled_params) > 1,
-            )
-            cache = self._execution_options["compiled_cache"]
-            compiled_sql = cache.get(key)
+        schema_translate_map = execution_options.get(
+            "schema_translate_map", None
+        )
 
-            if compiled_sql is None:
-                compiled_sql = elem.compile(
-                    dialect=dialect,
-                    cache_key=(elem_cache_key, extracted_params),
-                    column_keys=keys,
-                    inline=len(distilled_params) > 1,
-                    schema_translate_map=self._schema_translate_map,
-                    linting=self.dialect.compiler_linting
-                    | compiler.WARN_LINTING,
-                )
-                cache[key] = compiled_sql
+        compiled_cache = execution_options.get(
+            "compiled_cache", self.engine._compiled_cache
+        )
 
-        else:
-            extracted_params = None
-            compiled_sql = elem.compile(
-                dialect=dialect,
-                column_keys=keys,
-                inline=len(distilled_params) > 1,
-                schema_translate_map=self._schema_translate_map,
-                linting=self.dialect.compiler_linting | compiler.WARN_LINTING,
-            )
-
+        compiled_sql, extracted_params, cache_hit = elem._compile_w_cache(
+            dialect=dialect,
+            compiled_cache=compiled_cache,
+            column_keys=keys,
+            inline=inline,
+            schema_translate_map=schema_translate_map,
+            linting=self.dialect.compiler_linting | compiler.WARN_LINTING,
+        )
         ret = self._execute_context(
             dialect,
             dialect.execution_ctx_cls._init_compiled,
             compiled_sql,
             distilled_params,
+            execution_options,
             compiled_sql,
             distilled_params,
             elem,
             extracted_params,
+            cache_hit=cache_hit,
         )
-        if self._has_events or self.engine._has_events:
-            self.dispatch.after_execute(self, elem, multiparams, params, ret)
+        if has_events:
+            self.dispatch.after_execute(
+                self, elem, multiparams, params, execution_options, ret
+            )
         return ret
 
-    def _execute_compiled(self, compiled, multiparams, params):
-        """Execute a sql.Compiled object."""
+    def _execute_compiled(
+        self,
+        compiled,
+        multiparams,
+        params,
+        execution_options=_EMPTY_EXECUTION_OPTS,
+    ):
+        """Execute a sql.Compiled object.
+
+        TODO: why do we have this?   likely deprecate or remove
+
+        """
+
+        execution_options = compiled.execution_options.merge_with(
+            self._execution_options, execution_options
+        )
 
         if self._has_events or self.engine._has_events:
             for fn in self.dispatch.before_execute:
                 compiled, multiparams, params = fn(
-                    self, compiled, multiparams, params
+                    self, compiled, multiparams, params, execution_options
                 )
 
         dialect = self.dialect
@@ -1164,6 +1234,7 @@ class Connection(Connectable):
             dialect.execution_ctx_cls._init_compiled,
             compiled,
             parameters,
+            execution_options,
             compiled,
             parameters,
             None,
@@ -1171,16 +1242,27 @@ class Connection(Connectable):
         )
         if self._has_events or self.engine._has_events:
             self.dispatch.after_execute(
-                self, compiled, multiparams, params, ret
+                self, compiled, multiparams, params, execution_options, ret
             )
         return ret
 
-    def _exec_driver_sql_distilled(self, statement, parameters):
+    def _exec_driver_sql(
+        self,
+        statement,
+        multiparams,
+        params,
+        distilled_parameters,
+        execution_options,
+    ):
+
+        execution_options = self._execution_options.merge_with(
+            execution_options
+        )
 
         if self._has_events or self.engine._has_events:
             for fn in self.dispatch.before_execute:
                 statement, multiparams, params = fn(
-                    self, statement, parameters, {}
+                    self, statement, multiparams, params, execution_options
                 )
 
         dialect = self.dialect
@@ -1188,17 +1270,40 @@ class Connection(Connectable):
             dialect,
             dialect.execution_ctx_cls._init_statement,
             statement,
-            parameters,
+            distilled_parameters,
+            execution_options,
             statement,
-            parameters,
+            distilled_parameters,
         )
         if self._has_events or self.engine._has_events:
-            self.dispatch.after_execute(self, statement, parameters, {})
+            self.dispatch.after_execute(
+                self, statement, multiparams, params, execution_options, ret
+            )
         return ret
 
-    def exec_driver_sql(self, statement, parameters=None):
+    def _execute_20(
+        self,
+        statement,
+        parameters=None,
+        execution_options=_EMPTY_EXECUTION_OPTS,
+    ):
+        multiparams, params, distilled_parameters = _distill_params_20(
+            parameters
+        )
+        try:
+            meth = statement._execute_on_connection
+        except AttributeError as err:
+            util.raise_(
+                exc.ObjectNotExecutableError(statement), replace_context=err
+            )
+        else:
+            return meth(self, multiparams, params, execution_options)
+
+    def exec_driver_sql(
+        self, statement, parameters=None, execution_options=None
+    ):
         r"""Executes a SQL statement construct and returns a
-        :class:`.ResultProxy`.
+        :class:`_engine.CursorResult`.
 
         :param statement: The statement str to be executed.   Bound parameters
          must use the underlying DBAPI's paramstyle, such as "qmark",
@@ -1237,51 +1342,67 @@ class Connection(Connectable):
 
         """
 
-        if isinstance(parameters, list) and parameters:
-            if not isinstance(parameters[0], (dict, tuple)):
-                raise exc.ArgumentError(
-                    "List argument must consist only of tuples or dictionaries"
-                )
-        elif isinstance(parameters, (dict, tuple)):
-            parameters = [parameters]
+        multiparams, params, distilled_parameters = _distill_params_20(
+            parameters
+        )
 
-        return self._exec_driver_sql_distilled(statement, parameters or ())
+        return self._exec_driver_sql(
+            statement,
+            multiparams,
+            params,
+            distilled_parameters,
+            execution_options,
+        )
 
     def _execute_context(
-        self, dialect, constructor, statement, parameters, *args
+        self,
+        dialect,
+        constructor,
+        statement,
+        parameters,
+        execution_options,
+        *args,
+        **kw
     ):
         """Create an :class:`.ExecutionContext` and execute, returning
-        a :class:`.ResultProxy`."""
+        a :class:`_engine.CursorResult`."""
+
+        branched = self
+        if self.__branch_from:
+            # if this is a "branched" connection, do everything in terms
+            # of the "root" connection, *except* for .close(), which is
+            # the only feature that branching provides
+            self = self.__branch_from
 
         try:
-            try:
-                conn = self.__connection
-            except AttributeError:
-                # escape "except AttributeError" before revalidating
-                # to prevent misleading stacktraces in Py3K
-                conn = None
+            conn = self._dbapi_connection
             if conn is None:
                 conn = self._revalidate_connection()
 
-            context = constructor(dialect, self, conn, *args)
+            context = constructor(
+                dialect, self, conn, execution_options, *args, **kw
+            )
+        except (exc.PendingRollbackError, exc.ResourceClosedError):
+            raise
         except BaseException as e:
             self._handle_dbapi_exception(
                 e, util.text_type(statement), parameters, None, None
             )
 
-        if self._root.__transaction and not self._root.__transaction.is_active:
-            raise exc.InvalidRequestError(
-                "This connection is on an inactive %stransaction.  "
-                "Please rollback() fully before proceeding."
-                % (
-                    "savepoint "
-                    if isinstance(self.__transaction, NestedTransaction)
-                    else ""
-                ),
-                code="8s2a",
+        if (
+            self._transaction
+            and not self._transaction.is_active
+            or (
+                self._nested_transaction
+                and not self._nested_transaction.is_active
             )
-        if context.compiled:
-            context.pre_exec()
+        ):
+            self._invalid_transaction()
+
+        if self._is_future and self._transaction is None:
+            self.begin()
+
+        context.pre_exec()
 
         cursor, statement, parameters = (
             context.cursor,
@@ -1304,17 +1425,23 @@ class Connection(Connectable):
                 )
 
         if self._echo:
+
             self.engine.logger.info(statement)
+
+            stats = context._get_cache_stats()
+
             if not self.engine.hide_parameters:
                 self.engine.logger.info(
-                    "%r",
+                    "[%s] %r",
+                    stats,
                     sql_util._repr_params(
                         parameters, batches=10, ismulti=context.executemany
                     ),
                 )
             else:
                 self.engine.logger.info(
-                    "[SQL parameters hidden due to hide_parameters=True]"
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]"
+                    % (stats,)
                 )
 
         evt_handled = False
@@ -1360,27 +1487,35 @@ class Connection(Connectable):
                     context.executemany,
                 )
 
-            if context.compiled:
-                context.post_exec()
+            context.post_exec()
 
             result = context._setup_result_proxy()
 
-            if context.should_autocommit and self._root.__transaction is None:
-                self._root._commit_impl(autocommit=True)
+            if not self._is_future:
+                should_close_with_result = branched.should_close_with_result
 
-            # for "connectionless" execution, we have to close this
-            # Connection after the statement is complete.
-            if self.should_close_with_result:
-                assert not context._is_future_result
-
-                # ResultProxy already exhausted rows / has no rows.
-                # close us now
-                if result._soft_closed:
-                    self.close()
-                else:
-                    # ResultProxy will close this Connection when no more
-                    # rows to fetch.
+                if not result._soft_closed and should_close_with_result:
                     result._autoclose_connection = True
+
+                if (
+                    # usually we're in a transaction so avoid relatively
+                    # expensive / legacy should_autocommit call
+                    self._transaction is None
+                    and context.should_autocommit
+                ):
+                    self._commit_impl(autocommit=True)
+
+                # for "connectionless" execution, we have to close this
+                # Connection after the statement is complete.
+                # legacy stuff.
+                if should_close_with_result and context._soft_closed:
+                    assert not self._is_future
+                    assert not context._is_future_result
+
+                    # CursorResult already exhausted rows / has no rows.
+                    # close us now
+                    branched.close()
+
         except BaseException as e:
             self._handle_dbapi_exception(
                 e, statement, parameters, cursor, context
@@ -1449,9 +1584,6 @@ class Connection(Connectable):
     ):
         exc_info = sys.exc_info()
 
-        if context and context.exception is None:
-            context.exception = e
-
         is_exit_exception = not isinstance(e, Exception)
 
         if not self._is_disconnect:
@@ -1460,13 +1592,10 @@ class Connection(Connectable):
                 and not self.closed
                 and self.dialect.is_disconnect(
                     e,
-                    self.__connection if not self.invalidated else None,
+                    self._dbapi_connection if not self.invalidated else None,
                     cursor,
                 )
             ) or (is_exit_exception and not self.closed)
-
-            if context:
-                context.is_disconnect = self._is_disconnect
 
         invalidate_pool_on_disconnect = not is_exit_exception
 
@@ -1519,13 +1648,6 @@ class Connection(Connectable):
             ) and not self._execution_options.get(
                 "skip_user_error_events", False
             ):
-                # legacy dbapi_error event
-                if should_wrap and context:
-                    self.dispatch.dbapi_error(
-                        self, cursor, statement, parameters, context, e
-                    )
-
-                # new handle_error event
                 ctx = ExceptionContextImpl(
                     e,
                     sqlalchemy_exception,
@@ -1587,11 +1709,12 @@ class Connection(Connectable):
             if self._is_disconnect:
                 del self._is_disconnect
                 if not self.invalidated:
-                    dbapi_conn_wrapper = self.__connection
+                    dbapi_conn_wrapper = self._dbapi_connection
                     if invalidate_pool_on_disconnect:
                         self.engine.pool._invalidate(dbapi_conn_wrapper, e)
                     self.invalidate(e)
             if self.should_close_with_result:
+                assert not self._is_future
                 self.close()
 
     @classmethod
@@ -1666,14 +1789,15 @@ class Connection(Connectable):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Connection.transaction` method is deprecated and will be "
-        "removed in a future release.  Use the :meth:`.Engine.begin` "
+        "The :meth:`_engine.Connection.transaction` "
+        "method is deprecated and will be "
+        "removed in a future release.  Use the :meth:`_engine.Engine.begin` "
         "context manager instead.",
     )
     def transaction(self, callable_, *args, **kwargs):
         r"""Execute the given function within a transaction boundary.
 
-        The function is passed this :class:`.Connection`
+        The function is passed this :class:`_engine.Connection`
         as the first argument, followed by the given \*args and \**kwargs,
         e.g.::
 
@@ -1692,23 +1816,23 @@ class Connection(Connectable):
 
            The :meth:`.transaction` method is superseded by
            the usage of the Python ``with:`` statement, which can
-           be used with :meth:`.Connection.begin`::
+           be used with :meth:`_engine.Connection.begin`::
 
                with conn.begin():
                    conn.execute(text("some statement"), {'x':5, 'y':10})
 
-           As well as with :meth:`.Engine.begin`::
+           As well as with :meth:`_engine.Engine.begin`::
 
                with engine.begin() as conn:
                    conn.execute(text("some statement"), {'x':5, 'y':10})
 
         .. seealso::
 
-            :meth:`.Engine.begin` - engine-level transactional
+            :meth:`_engine.Engine.begin` - engine-level transactional
             context
 
-            :meth:`.Engine.transaction` - engine-level version of
-            :meth:`.Connection.transaction`
+            :meth:`_engine.Engine.transaction` - engine-level version of
+            :meth:`_engine.Connection.transaction`
 
         """
 
@@ -1724,19 +1848,20 @@ class Connection(Connectable):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Connection.run_callable` method is deprecated and will "
+        "The :meth:`_engine.Connection.run_callable` "
+        "method is deprecated and will "
         "be removed in a future release.  Use a context manager instead.",
     )
     def run_callable(self, callable_, *args, **kwargs):
         r"""Given a callable object or function, execute it, passing
-        a :class:`.Connection` as the first argument.
+        a :class:`_engine.Connection` as the first argument.
 
         The given \*args and \**kwargs are passed subsequent
-        to the :class:`.Connection` argument.
+        to the :class:`_engine.Connection` argument.
 
-        This function, along with :meth:`.Engine.run_callable`,
-        allows a function to be run with a :class:`.Connection`
-        or :class:`.Engine` object without the need to know
+        This function, along with :meth:`_engine.Engine.run_callable`,
+        allows a function to be run with a :class:`_engine.Connection`
+        or :class:`_engine.Engine` object without the need to know
         which one is being dealt with.
 
         """
@@ -1774,8 +1899,8 @@ class Transaction(object):
     """Represent a database transaction in progress.
 
     The :class:`.Transaction` object is procured by
-    calling the :meth:`~.Connection.begin` method of
-    :class:`.Connection`::
+    calling the :meth:`_engine.Connection.begin` method of
+    :class:`_engine.Connection`::
 
         from sqlalchemy import create_engine
         engine = create_engine("postgresql://scott:tiger@localhost/test")
@@ -1788,7 +1913,7 @@ class Transaction(object):
     methods in order to control transaction boundaries.  It
     also implements a context manager interface so that
     the Python ``with`` statement can be used with the
-    :meth:`.Connection.begin` method::
+    :meth:`_engine.Connection.begin` method::
 
         with connection.begin():
             connection.execute(text("insert into x (a, b) values (1, 2)"))
@@ -1797,29 +1922,52 @@ class Transaction(object):
 
     .. seealso::
 
-        :meth:`.Connection.begin`
+        :meth:`_engine.Connection.begin`
 
-        :meth:`.Connection.begin_twophase`
+        :meth:`_engine.Connection.begin_twophase`
 
-        :meth:`.Connection.begin_nested`
+        :meth:`_engine.Connection.begin_nested`
 
     .. index::
       single: thread safety; Transaction
     """
 
+    __slots__ = ()
+
     _is_root = False
 
-    def __init__(self, connection, parent):
-        self.connection = connection
-        self._actual_parent = parent
-        self.is_active = True
+    def __init__(self, connection):
+        raise NotImplementedError()
 
-    def _deactivate(self):
-        self.is_active = False
+    def _do_deactivate(self):
+        """do whatever steps are necessary to set this transaction as
+        "deactive", however leave this transaction object in place as far
+        as the connection's state.
+
+        for a "real" transaction this should roll back the transction
+        and ensure this transaction is no longer a reset agent.
+
+        this is used for nesting of marker transactions where the marker
+        can set the "real" transaction as rolled back, however it stays
+        in place.
+
+        for 2.0 we hope to remove this nesting feature.
+
+        """
+        raise NotImplementedError()
+
+    def _do_close(self):
+        raise NotImplementedError()
+
+    def _do_rollback(self):
+        raise NotImplementedError()
+
+    def _do_commit(self):
+        raise NotImplementedError()
 
     @property
-    def _parent(self):
-        return self._actual_parent or self
+    def is_valid(self):
+        return self.is_active and not self.connection.invalidated
 
     def close(self):
         """Close this :class:`.Transaction`.
@@ -1832,34 +1980,27 @@ class Transaction(object):
         an enclosing transaction.
 
         """
-        if not self._parent.is_active:
-            return
-        if self._parent is self:
-            self.rollback()
+        try:
+            self._do_close()
+        finally:
+            assert not self.is_active
 
     def rollback(self):
         """Roll back this :class:`.Transaction`.
 
         """
-
-        if self._parent.is_active:
+        try:
             self._do_rollback()
-            self.is_active = False
-        self.connection._discard_transaction(self)
-
-    def _do_rollback(self):
-        self._parent._deactivate()
+        finally:
+            assert not self.is_active
 
     def commit(self):
         """Commit this :class:`.Transaction`."""
 
-        if not self._parent.is_active:
-            raise exc.InvalidRequestError("This transaction is inactive")
-        self._do_commit()
-        self.is_active = False
-
-    def _do_commit(self):
-        pass
+        try:
+            self._do_commit()
+        finally:
+            assert not self.is_active
 
     def __enter__(self):
         return self
@@ -1875,73 +2016,270 @@ class Transaction(object):
             self.rollback()
 
 
+class MarkerTransaction(Transaction):
+    """A 'marker' transaction that is used for nested begin() calls.
+
+    .. deprecated:: 1.4 future connection for 2.0 won't support this pattern.
+
+    """
+
+    __slots__ = ("connection", "_is_active", "_transaction")
+
+    def __init__(self, connection):
+        assert connection._transaction is not None
+        if not connection._transaction.is_active:
+            raise exc.InvalidRequestError(
+                "the current transaction on this connection is inactive.  "
+                "Please issue a rollback first."
+            )
+
+        self.connection = connection
+        if connection._nested_transaction is not None:
+            self._transaction = connection._nested_transaction
+        else:
+            self._transaction = connection._transaction
+        self._is_active = True
+
+    @property
+    def is_active(self):
+        return self._is_active and self._transaction.is_active
+
+    def _deactivate(self):
+        self._is_active = False
+
+    def _do_close(self):
+        # does not actually roll back the root
+        self._deactivate()
+
+    def _do_rollback(self):
+        # does roll back the root
+        if self._is_active:
+            try:
+                self._transaction._do_deactivate()
+            finally:
+                self._deactivate()
+
+    def _do_commit(self):
+        self._deactivate()
+
+
 class RootTransaction(Transaction):
     _is_root = True
 
+    __slots__ = ("connection", "is_active")
+
     def __init__(self, connection):
-        super(RootTransaction, self).__init__(connection, None)
+        assert connection._transaction is None
+        self.connection = connection
+        self._connection_begin_impl()
+        connection._transaction = self
+
+        self.is_active = True
+
+        # the SingletonThreadPool used with sqlite memory can share the same
+        # DBAPI connection / fairy among multiple Connection objects.  while
+        # this is not ideal, it is a still-supported use case which at the
+        # moment occurs in the test suite due to how some of pytest fixtures
+        # work out
+        if connection._dbapi_connection._reset_agent is None:
+            connection._dbapi_connection._reset_agent = self
+
+    def _deactivate_from_connection(self):
+        if self.is_active:
+            assert self.connection._transaction is self
+            self.is_active = False
+
+            if (
+                self.connection._dbapi_connection is not None
+                and self.connection._dbapi_connection._reset_agent is self
+            ):
+                self.connection._dbapi_connection._reset_agent = None
+
+        elif self.connection._transaction is not self:
+            util.warn("transaction already deassociated from connection")
+
+        # we have tests that want to make sure the pool handles this
+        # correctly.  TODO: how to disable internal assertions cleanly?
+        # else:
+        #    if self.connection._dbapi_connection is not None:
+        #        assert (
+        #            self.connection._dbapi_connection._reset_agent is not self
+        #        )
+
+    def _do_deactivate(self):
+        # called from a MarkerTransaction to cancel this root transaction.
+        # the transaction stays in place as connection._transaction, but
+        # is no longer active and is no longer the reset agent for the
+        # pooled connection.   the connection won't support a new begin()
+        # until this transaction is explicitly closed, rolled back,
+        # or committed.
+
+        assert self.connection._transaction is self
+
+        if self.is_active:
+            self._connection_rollback_impl()
+
+        # handle case where a savepoint was created inside of a marker
+        # transaction that refers to a root.  nested has to be cancelled
+        # also.
+        if self.connection._nested_transaction:
+            self.connection._nested_transaction._cancel()
+
+        self._deactivate_from_connection()
+
+    def _connection_begin_impl(self):
         self.connection._begin_impl(self)
 
-    def _deactivate(self):
-        self._do_rollback(deactivate_only=True)
-        self.is_active = False
+    def _connection_rollback_impl(self):
+        self.connection._rollback_impl()
 
-    def _do_rollback(self, deactivate_only=False):
-        if self.is_active:
-            self.connection._rollback_impl(deactivate_only=deactivate_only)
+    def _connection_commit_impl(self):
+        self.connection._commit_impl()
+
+    def _close_impl(self, try_deactivate=False):
+        try:
+            if self.is_active:
+                self._connection_rollback_impl()
+
+            if self.connection._nested_transaction:
+                self.connection._nested_transaction._cancel()
+        finally:
+            if self.is_active or try_deactivate:
+                self._deactivate_from_connection()
+            if self.connection._transaction is self:
+                self.connection._transaction = None
+
+        assert not self.is_active
+        assert self.connection._transaction is not self
+
+    def _do_close(self):
+        self._close_impl()
+
+    def _do_rollback(self):
+        self._close_impl(try_deactivate=True)
 
     def _do_commit(self):
         if self.is_active:
-            self.connection._commit_impl()
+            assert self.connection._transaction is self
+
+            try:
+                self._connection_commit_impl()
+            finally:
+                # whether or not commit succeeds, cancel any
+                # nested transactions, make this transaction "inactive"
+                # and remove it as a reset agent
+                if self.connection._nested_transaction:
+                    self.connection._nested_transaction._cancel()
+
+                self._deactivate_from_connection()
+
+            # ...however only remove as the connection's current transaction
+            # if commit succeeded.  otherwise it stays on so that a rollback
+            # needs to occur.
+            self.connection._transaction = None
+        else:
+            if self.connection._transaction is self:
+                self.connection._invalid_transaction()
+            else:
+                raise exc.InvalidRequestError("This transaction is inactive")
+
+        assert not self.is_active
+        assert self.connection._transaction is not self
 
 
 class NestedTransaction(Transaction):
     """Represent a 'nested', or SAVEPOINT transaction.
 
     A new :class:`.NestedTransaction` object may be procured
-    using the :meth:`.Connection.begin_nested` method.
+    using the :meth:`_engine.Connection.begin_nested` method.
 
     The interface is the same as that of :class:`.Transaction`.
 
     """
 
-    def __init__(self, connection, parent):
-        super(NestedTransaction, self).__init__(connection, parent)
+    __slots__ = ("connection", "is_active", "_savepoint", "_previous_nested")
+
+    def __init__(self, connection):
+        assert connection._transaction is not None
+        self.connection = connection
         self._savepoint = self.connection._savepoint_impl()
+        self.is_active = True
+        self._previous_nested = connection._nested_transaction
+        connection._nested_transaction = self
 
-    def _deactivate(self):
-        self._do_rollback(deactivate_only=True)
-        self.is_active = False
-
-    def _do_rollback(self, deactivate_only=False):
-        if self.is_active:
-            self.connection._rollback_to_savepoint_impl(
-                self._savepoint, self._parent
+    def _deactivate_from_connection(self):
+        if self.connection._nested_transaction is self:
+            self.connection._nested_transaction = self._previous_nested
+        else:
+            util.warn(
+                "nested transaction already deassociated from connection"
             )
+
+    def _cancel(self):
+        # called by RootTransaction when the outer transaction is
+        # committed, rolled back, or closed to cancel all savepoints
+        # without any action being taken
+        self.is_active = False
+        self._deactivate_from_connection()
+        if self._previous_nested:
+            self._previous_nested._cancel()
+
+    def _close_impl(self, deactivate_from_connection):
+        try:
+            if self.is_active and self.connection._transaction.is_active:
+                self.connection._rollback_to_savepoint_impl(self._savepoint)
+        finally:
+            self.is_active = False
+            if deactivate_from_connection:
+                self._deactivate_from_connection()
+
+    def _do_deactivate(self):
+        self._close_impl(False)
+
+    def _do_close(self):
+        self._close_impl(True)
+
+    def _do_rollback(self):
+        self._close_impl(True)
 
     def _do_commit(self):
         if self.is_active:
-            self.connection._release_savepoint_impl(
-                self._savepoint, self._parent
-            )
+            try:
+                self.connection._release_savepoint_impl(self._savepoint)
+            finally:
+                # nested trans becomes inactive on failed release
+                # unconditionally.  this prevents it from trying to
+                # emit SQL when it rolls back.
+                self.is_active = False
+
+            # but only de-associate from connection if it succeeded
+            self._deactivate_from_connection()
+        else:
+            if self.connection._nested_transaction is self:
+                self.connection._invalid_transaction()
+            else:
+                raise exc.InvalidRequestError(
+                    "This nested transaction is inactive"
+                )
 
 
-class TwoPhaseTransaction(Transaction):
+class TwoPhaseTransaction(RootTransaction):
     """Represent a two-phase transaction.
 
     A new :class:`.TwoPhaseTransaction` object may be procured
-    using the :meth:`.Connection.begin_twophase` method.
+    using the :meth:`_engine.Connection.begin_twophase` method.
 
     The interface is the same as that of :class:`.Transaction`
     with the addition of the :meth:`prepare` method.
 
     """
 
+    __slots__ = ("connection", "is_active", "xid", "_is_prepared")
+
     def __init__(self, connection, xid):
-        super(TwoPhaseTransaction, self).__init__(connection, None)
         self._is_prepared = False
         self.xid = xid
-        self.connection._begin_twophase_impl(self)
+        super(TwoPhaseTransaction, self).__init__(connection)
 
     def prepare(self):
         """Prepare this :class:`.TwoPhaseTransaction`.
@@ -1949,15 +2287,18 @@ class TwoPhaseTransaction(Transaction):
         After a PREPARE, the transaction can be committed.
 
         """
-        if not self._parent.is_active:
+        if not self.is_active:
             raise exc.InvalidRequestError("This transaction is inactive")
         self.connection._prepare_twophase_impl(self.xid)
         self._is_prepared = True
 
-    def _do_rollback(self):
+    def _connection_begin_impl(self):
+        self.connection._begin_twophase_impl(self)
+
+    def _connection_rollback_impl(self):
         self.connection._rollback_twophase_impl(self.xid, self._is_prepared)
 
-    def _do_commit(self):
+    def _connection_commit_impl(self):
         self.connection._commit_twophase_impl(self.xid, self._is_prepared)
 
 
@@ -1967,7 +2308,7 @@ class Engine(Connectable, log.Identified):
     :class:`~sqlalchemy.engine.interfaces.Dialect` together to provide a
     source of database connectivity and behavior.
 
-    An :class:`.Engine` object is instantiated publicly using the
+    An :class:`_engine.Engine` object is instantiated publicly using the
     :func:`~sqlalchemy.create_engine` function.
 
     .. seealso::
@@ -1978,9 +2319,11 @@ class Engine(Connectable, log.Identified):
 
     """
 
-    _execution_options = util.immutabledict()
+    _execution_options = _EMPTY_EXECUTION_OPTS
     _has_events = False
     _connection_cls = Connection
+    _sqla_logger_namespace = "sqlalchemy.engine.Engine"
+    _is_future = False
 
     _schema_translate_map = None
 
@@ -1991,6 +2334,7 @@ class Engine(Connectable, log.Identified):
         url,
         logging_name=None,
         echo=None,
+        query_cache_size=500,
         execution_options=None,
         hide_parameters=False,
     ):
@@ -2001,29 +2345,58 @@ class Engine(Connectable, log.Identified):
             self.logging_name = logging_name
         self.echo = echo
         self.hide_parameters = hide_parameters
+        if query_cache_size != 0:
+            self._compiled_cache = util.LRUCache(
+                query_cache_size, size_alert=self._lru_size_alert
+            )
+        else:
+            self._compiled_cache = None
         log.instance_logger(self, echoflag=echo)
         if execution_options:
             self.update_execution_options(**execution_options)
+
+    def _lru_size_alert(self, cache):
+        if self._should_log_info:
+            self.logger.info(
+                "Compiled cache size pruning from %d items to %d.  "
+                "Increase cache size to reduce the frequency of pruning.",
+                len(cache),
+                cache.capacity,
+            )
 
     @property
     def engine(self):
         return self
 
+    def clear_compiled_cache(self):
+        """Clear the compiled cache associated with the dialect.
+
+        This applies **only** to the built-in cache that is established
+        via the :paramref:`.create_engine.query_cache_size` parameter.
+        It will not impact any dictionary caches that were passed via the
+        :paramref:`.Connection.execution_options.query_cache` parameter.
+
+        .. versionadded:: 1.4
+
+        """
+        if self._compiled_cache:
+            self._compiled_cache.clear()
+
     def update_execution_options(self, **opt):
         r"""Update the default execution_options dictionary
-        of this :class:`.Engine`.
+        of this :class:`_engine.Engine`.
 
         The given keys/values in \**opt are added to the
         default execution options that will be used for
         all connections.  The initial contents of this dictionary
         can be sent via the ``execution_options`` parameter
-        to :func:`.create_engine`.
+        to :func:`_sa.create_engine`.
 
         .. seealso::
 
-            :meth:`.Connection.execution_options`
+            :meth:`_engine.Connection.execution_options`
 
-            :meth:`.Engine.execution_options`
+            :meth:`_engine.Engine.execution_options`
 
         """
         self._execution_options = self._execution_options.union(opt)
@@ -2031,25 +2404,28 @@ class Engine(Connectable, log.Identified):
         self.dialect.set_engine_execution_options(self, opt)
 
     def execution_options(self, **opt):
-        """Return a new :class:`.Engine` that will provide
-        :class:`.Connection` objects with the given execution options.
+        """Return a new :class:`_engine.Engine` that will provide
+        :class:`_engine.Connection` objects with the given execution options.
 
-        The returned :class:`.Engine` remains related to the original
-        :class:`.Engine` in that it shares the same connection pool and
+        The returned :class:`_engine.Engine` remains related to the original
+        :class:`_engine.Engine` in that it shares the same connection pool and
         other state:
 
-        * The :class:`.Pool` used by the new :class:`.Engine` is the
-          same instance.  The :meth:`.Engine.dispose` method will replace
+        * The :class:`_pool.Pool` used by the new :class:`_engine.Engine`
+          is the
+          same instance.  The :meth:`_engine.Engine.dispose`
+          method will replace
           the connection pool instance for the parent engine as well
           as this one.
-        * Event listeners are "cascaded" - meaning, the new :class:`.Engine`
+        * Event listeners are "cascaded" - meaning, the new
+          :class:`_engine.Engine`
           inherits the events of the parent, and new events can be associated
-          with the new :class:`.Engine` individually.
+          with the new :class:`_engine.Engine` individually.
         * The logging configuration and logging_name is copied from the parent
-          :class:`.Engine`.
+          :class:`_engine.Engine`.
 
-        The intent of the :meth:`.Engine.execution_options` method is
-        to implement "sharding" schemes where multiple :class:`.Engine`
+        The intent of the :meth:`_engine.Engine.execution_options` method is
+        to implement "sharding" schemes where multiple :class:`_engine.Engine`
         objects refer to the same connection pool, but are differentiated
         by options that would be consumed by a custom event::
 
@@ -2058,15 +2434,18 @@ class Engine(Connectable, log.Identified):
             shard2 = primary_engine.execution_options(shard_id="shard2")
 
         Above, the ``shard1`` engine serves as a factory for
-        :class:`.Connection` objects that will contain the execution option
-        ``shard_id=shard1``, and ``shard2`` will produce :class:`.Connection`
+        :class:`_engine.Connection`
+        objects that will contain the execution option
+        ``shard_id=shard1``, and ``shard2`` will produce
+        :class:`_engine.Connection`
         objects that contain the execution option ``shard_id=shard2``.
 
         An event handler can consume the above execution option to perform
         a schema switch or other operation, given a connection.  Below
         we emit a MySQL ``use`` statement to switch databases, at the same
         time keeping track of which database we've established using the
-        :attr:`.Connection.info` dictionary, which gives us a persistent
+        :attr:`_engine.Connection.info` dictionary,
+        which gives us a persistent
         storage space that follows the DBAPI connection::
 
             from sqlalchemy import event
@@ -2086,17 +2465,19 @@ class Engine(Connectable, log.Identified):
 
         .. seealso::
 
-            :meth:`.Connection.execution_options` - update execution options
-            on a :class:`.Connection` object.
+            :meth:`_engine.Connection.execution_options`
+            - update execution options
+            on a :class:`_engine.Connection` object.
 
-            :meth:`.Engine.update_execution_options` - update the execution
-            options for a given :class:`.Engine` in place.
+            :meth:`_engine.Engine.update_execution_options`
+            - update the execution
+            options for a given :class:`_engine.Engine` in place.
 
-            :meth:`.Engine.get_execution_options`
+            :meth:`_engine.Engine.get_execution_options`
 
 
         """
-        return OptionEngine(self, opt)
+        return self._option_cls(self, opt)
 
     def get_execution_options(self):
         """ Get the non-SQL options which will take effect during execution.
@@ -2105,7 +2486,7 @@ class Engine(Connectable, log.Identified):
 
         .. seealso::
 
-            :meth:`.Engine.execution_options`
+            :meth:`_engine.Engine.execution_options`
         """
         return self._execution_options
 
@@ -2129,20 +2510,23 @@ class Engine(Connectable, log.Identified):
         return "Engine(%r)" % self.url
 
     def dispose(self):
-        """Dispose of the connection pool used by this :class:`.Engine`.
+        """Dispose of the connection pool used by this :class:`_engine.Engine`
+        .
 
         This has the effect of fully closing all **currently checked in**
         database connections.  Connections that are still checked out
         will **not** be closed, however they will no longer be associated
-        with this :class:`.Engine`, so when they are closed individually,
-        eventually the :class:`.Pool` which they are associated with will
+        with this :class:`_engine.Engine`,
+        so when they are closed individually,
+        eventually the :class:`_pool.Pool` which they are associated with will
         be garbage collected and they will be closed out fully, if
         not already closed on checkin.
 
         A new connection pool is created immediately after the old one has
         been disposed.   This new pool, like all SQLAlchemy connection pools,
         does not make any actual connections to the database until one is
-        first requested, so as long as the :class:`.Engine` isn't used again,
+        first requested, so as long as the :class:`_engine.Engine`
+        isn't used again,
         no new connections will be made.
 
         .. seealso::
@@ -2179,12 +2563,13 @@ class Engine(Connectable, log.Identified):
             if type_ is not None:
                 self.transaction.rollback()
             else:
-                self.transaction.commit()
+                if self.transaction.is_active:
+                    self.transaction.commit()
             if not self.close_with_result:
                 self.conn.close()
 
     def begin(self, close_with_result=False):
-        """Return a context manager delivering a :class:`.Connection`
+        """Return a context manager delivering a :class:`_engine.Connection`
         with a :class:`.Transaction` established.
 
         E.g.::
@@ -2200,23 +2585,28 @@ class Engine(Connectable, log.Identified):
         is rolled back.
 
         The ``close_with_result`` flag is normally ``False``, and indicates
-        that the :class:`.Connection` will be closed when the operation
+        that the :class:`_engine.Connection` will be closed when the operation
         is complete.   When set to ``True``, it indicates the
-        :class:`.Connection` is in "single use" mode, where the
-        :class:`.ResultProxy` returned by the first call to
-        :meth:`.Connection.execute` will close the :class:`.Connection` when
-        that :class:`.ResultProxy` has exhausted all result rows.
+        :class:`_engine.Connection` is in "single use" mode, where the
+        :class:`_engine.CursorResult` returned by the first call to
+        :meth:`_engine.Connection.execute` will close the
+        :class:`_engine.Connection` when
+        that :class:`_engine.CursorResult` has exhausted all result rows.
 
         .. seealso::
 
-            :meth:`.Engine.connect` - procure a :class:`.Connection` from
-            an :class:`.Engine`.
+            :meth:`_engine.Engine.connect` - procure a
+            :class:`_engine.Connection` from
+            an :class:`_engine.Engine`.
 
-            :meth:`.Connection.begin` - start a :class:`.Transaction`
-            for a particular :class:`.Connection`.
+            :meth:`_engine.Connection.begin` - start a :class:`.Transaction`
+            for a particular :class:`_engine.Connection`.
 
         """
-        conn = self.connect(close_with_result=close_with_result)
+        if self._connection_cls._is_future:
+            conn = self.connect()
+        else:
+            conn = self.connect(close_with_result=close_with_result)
         try:
             trans = conn.begin()
         except:
@@ -2226,15 +2616,17 @@ class Engine(Connectable, log.Identified):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Engine.transaction` method is deprecated and will be "
-        "removed in a future release.  Use the :meth:`.Engine.begin` context "
+        "The :meth:`_engine.Engine.transaction` "
+        "method is deprecated and will be "
+        "removed in a future release.  Use the :meth:`_engine.Engine.begin` "
+        "context "
         "manager instead.",
     )
     def transaction(self, callable_, *args, **kwargs):
         r"""Execute the given function within a transaction boundary.
 
-        The function is passed a :class:`.Connection` newly procured
-        from :meth:`.Engine.connect` as the first argument,
+        The function is passed a :class:`_engine.Connection` newly procured
+        from :meth:`_engine.Engine.connect` as the first argument,
         followed by the given \*args and \**kwargs.
 
         e.g.::
@@ -2254,18 +2646,19 @@ class Engine(Connectable, log.Identified):
 
            The :meth:`.transaction` method is superseded by
            the usage of the Python ``with:`` statement, which can
-           be used with :meth:`.Engine.begin`::
+           be used with :meth:`_engine.Engine.begin`::
 
                with engine.begin() as conn:
                    conn.execute(text("some statement"), {'x':5, 'y':10})
 
         .. seealso::
 
-            :meth:`.Engine.begin` - engine-level transactional
+            :meth:`_engine.Engine.begin` - engine-level transactional
             context
 
-            :meth:`.Connection.transaction` - connection-level version of
-            :meth:`.Engine.transaction`
+            :meth:`_engine.Connection.transaction`
+            - connection-level version of
+            :meth:`_engine.Engine.transaction`
 
         """
         kwargs["_sa_skip_warning"] = True
@@ -2274,20 +2667,21 @@ class Engine(Connectable, log.Identified):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Engine.run_callable` method is deprecated and will be "
-        "removed in a future release.  Use the :meth:`.Engine.connect` "
+        "The :meth:`_engine.Engine.run_callable` "
+        "method is deprecated and will be "
+        "removed in a future release.  Use the :meth:`_engine.Engine.connect` "
         "context manager instead.",
     )
     def run_callable(self, callable_, *args, **kwargs):
         r"""Given a callable object or function, execute it, passing
-        a :class:`.Connection` as the first argument.
+        a :class:`_engine.Connection` as the first argument.
 
         The given \*args and \**kwargs are passed subsequent
-        to the :class:`.Connection` argument.
+        to the :class:`_engine.Connection` argument.
 
-        This function, along with :meth:`.Connection.run_callable`,
-        allows a function to be run with a :class:`.Connection`
-        or :class:`.Engine` object without the need to know
+        This function, along with :meth:`_engine.Connection.run_callable`,
+        allows a function to be run with a :class:`_engine.Connection`
+        or :class:`_engine.Engine` object without the need to know
         which one is being dealt with.
 
         """
@@ -2300,23 +2694,27 @@ class Engine(Connectable, log.Identified):
             conn._run_ddl_visitor(visitorcallable, element, **kwargs)
 
     @util.deprecated_20(
-        ":meth:`.Engine.execute`",
+        ":meth:`_engine.Engine.execute`",
         alternative="All statement execution in SQLAlchemy 2.0 is performed "
-        "by the :meth:`.Connection.execute` method of :class:`.Connection`, "
+        "by the :meth:`_engine.Connection.execute` method of "
+        ":class:`_engine.Connection`, "
         "or in the ORM by the :meth:`.Session.execute` method of "
         ":class:`.Session`.",
     )
     def execute(self, statement, *multiparams, **params):
-        """Executes the given construct and returns a :class:`.ResultProxy`.
+        """Executes the given construct and returns a
+        :class:`_engine.CursorResult`.
 
         The arguments are the same as those used by
-        :meth:`.Connection.execute`.
+        :meth:`_engine.Connection.execute`.
 
-        Here, a :class:`.Connection` is acquired using the
-        :meth:`~.Engine.connect` method, and the statement executed
-        with that connection. The returned :class:`.ResultProxy` is flagged
-        such that when the :class:`.ResultProxy` is exhausted and its
-        underlying cursor is closed, the :class:`.Connection` created here
+        Here, a :class:`_engine.Connection` is acquired using the
+        :meth:`_engine.Engine.connect` method, and the statement executed
+        with that connection. The returned :class:`_engine.CursorResult`
+        is flagged
+        such that when the :class:`_engine.CursorResult` is exhausted and its
+        underlying cursor is closed, the :class:`_engine.Connection`
+        created here
         will also be closed, which allows its associated DBAPI connection
         resource to be returned to the connection pool.
 
@@ -2325,11 +2723,13 @@ class Engine(Connectable, log.Identified):
         return connection.execute(statement, *multiparams, **params)
 
     @util.deprecated_20(
-        ":meth:`.Engine.scalar`",
+        ":meth:`_engine.Engine.scalar`",
         alternative="All statement execution in SQLAlchemy 2.0 is performed "
-        "by the :meth:`.Connection.execute` method of :class:`.Connection`, "
+        "by the :meth:`_engine.Connection.execute` method of "
+        ":class:`_engine.Connection`, "
         "or in the ORM by the :meth:`.Session.execute` method of "
-        ":class:`.Session`; the :meth:`.Result.scalar` method can then be "
+        ":class:`.Session`; the :meth:`_future.Result.scalar` "
+        "method can then be "
         "used to return a scalar result.",
     )
     def scalar(self, statement, *multiparams, **params):
@@ -2339,25 +2739,42 @@ class Engine(Connectable, log.Identified):
         """
         return self.execute(statement, *multiparams, **params).scalar()
 
-    def _execute_clauseelement(self, elem, multiparams=None, params=None):
+    def _execute_clauseelement(
+        self,
+        elem,
+        multiparams=None,
+        params=None,
+        execution_options=_EMPTY_EXECUTION_OPTS,
+    ):
         connection = self.connect(close_with_result=True)
-        return connection._execute_clauseelement(elem, multiparams, params)
+        return connection._execute_clauseelement(
+            elem, multiparams, params, execution_options
+        )
 
-    def _execute_compiled(self, compiled, multiparams, params):
+    def _execute_compiled(
+        self,
+        compiled,
+        multiparams,
+        params,
+        execution_options=_EMPTY_EXECUTION_OPTS,
+    ):
         connection = self.connect(close_with_result=True)
-        return connection._execute_compiled(compiled, multiparams, params)
+        return connection._execute_compiled(
+            compiled, multiparams, params, execution_options
+        )
 
     def connect(self, close_with_result=False):
-        """Return a new :class:`.Connection` object.
+        """Return a new :class:`_engine.Connection` object.
 
-        The :class:`.Connection` object is a facade that uses a DBAPI
+        The :class:`_engine.Connection` object is a facade that uses a DBAPI
         connection internally in order to communicate with the database.  This
-        connection is procured from the connection-holding :class:`.Pool`
-        referenced by this :class:`.Engine`. When the
-        :meth:`~.Connection.close` method of the :class:`.Connection` object
+        connection is procured from the connection-holding :class:`_pool.Pool`
+        referenced by this :class:`_engine.Engine`. When the
+        :meth:`_engine.Connection.close` method of the
+        :class:`_engine.Connection` object
         is called, the underlying DBAPI connection is then returned to the
         connection pool, where it may be used again in a subsequent call to
-        :meth:`~.Engine.connect`.
+        :meth:`_engine.Engine.connect`.
 
         """
 
@@ -2365,9 +2782,10 @@ class Engine(Connectable, log.Identified):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Engine.table_names` method is deprecated and will be "
+        "The :meth:`_engine.Engine.table_names` "
+        "method is deprecated and will be "
         "removed in a future release.  Please refer to "
-        ":meth:`.Inspector.get_table_names`.",
+        ":meth:`_reflection.Inspector.get_table_names`.",
     )
     def table_names(self, schema=None, connection=None):
         """Return a list of all table names available in the database.
@@ -2382,9 +2800,10 @@ class Engine(Connectable, log.Identified):
 
     @util.deprecated(
         "1.4",
-        "The :meth:`.Engine.has_table` method is deprecated and will be "
+        "The :meth:`_engine.Engine.has_table` "
+        "method is deprecated and will be "
         "removed in a future release.  Please refer to "
-        ":meth:`.Inspector.has_table`.",
+        ":meth:`_reflection.Inspector.has_table`.",
     )
     def has_table(self, table_name, schema=None):
         """Return True if the given backend has a table of the given name.
@@ -2392,7 +2811,7 @@ class Engine(Connectable, log.Identified):
         .. seealso::
 
             :ref:`metadata_reflection_inspector` - detailed schema inspection
-            using the :class:`.Inspector` interface.
+            using the :class:`_reflection.Inspector` interface.
 
             :class:`.quoted_name` - used to pass quoting information along
             with a schema identifier.
@@ -2427,10 +2846,11 @@ class Engine(Connectable, log.Identified):
         for real.
 
         This method provides direct DBAPI connection access for
-        special situations when the API provided by :class:`.Connection`
-        is not needed.   When a :class:`.Connection` object is already
+        special situations when the API provided by
+        :class:`_engine.Connection`
+        is not needed.   When a :class:`_engine.Connection` object is already
         present, the DBAPI connection is available using
-        the :attr:`.Connection.connection` accessor.
+        the :attr:`_engine.Connection.connection` accessor.
 
         .. seealso::
 
@@ -2440,7 +2860,7 @@ class Engine(Connectable, log.Identified):
         return self._wrap_pool_connect(self.pool.connect, _connection)
 
 
-class OptionEngine(Engine):
+class OptionEngineMixin(object):
     _sa_propagate_class_events = False
 
     def __init__(self, proxied, execution_options):
@@ -2449,6 +2869,7 @@ class OptionEngine(Engine):
         self.dialect = proxied.dialect
         self.logging_name = proxied.logging_name
         self.echo = proxied.echo
+        self._compiled_cache = proxied._compiled_cache
         self.hide_parameters = proxied.hide_parameters
         log.instance_logger(self, echoflag=self.echo)
 
@@ -2486,3 +2907,10 @@ class OptionEngine(Engine):
         self.__dict__["_has_events"] = value
 
     _has_events = property(_get_has_events, _set_has_events)
+
+
+class OptionEngine(OptionEngineMixin, Engine):
+    pass
+
+
+Engine._option_cls = OptionEngine

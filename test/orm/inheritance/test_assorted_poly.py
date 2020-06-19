@@ -1262,11 +1262,11 @@ class GenerativeTest(fixtures.MappedTest, AssertsExecutionResults):
         )
 
     @classmethod
-    def insert_data(cls):
+    def insert_data(cls, connection):
         Status, Person, Engineer, Manager, Car = cls.classes(
             "Status", "Person", "Engineer", "Manager", "Car"
         )
-        session = create_session()
+        session = create_session(connection)
 
         active = Status(name="active")
         dead = Status(name="dead")
@@ -1342,6 +1342,7 @@ class GenerativeTest(fixtures.MappedTest, AssertsExecutionResults):
             )
             .order_by(Person.name)
         )
+
         eq_(
             list(r),
             [
@@ -2162,13 +2163,13 @@ class CorrelateExceptWPolyAdaptTest(
             __tablename__ = "c"
             id = Column(Integer, primary_key=True)
 
-            if use_correlate_except:
-                num_superclass = column_property(
-                    select([func.count(Superclass.id)])
-                    .where(Superclass.common_id == id)
-                    .correlate_except(Superclass)
-                    .scalar_subquery()
-                )
+        if use_correlate_except:
+            Common.num_superclass = column_property(
+                select([func.count(Superclass.id)])
+                .where(Superclass.common_id == Common.id)
+                .correlate_except(Superclass)
+                .scalar_subquery()
+            )
 
         if not use_correlate_except:
             Common.num_superclass = column_property(
@@ -2222,13 +2223,12 @@ class CorrelateExceptWPolyAdaptTest(
             .filter(Common.id == 1)
         )
 
-        # c.id, subquery are reversed.
         self.assert_compile(
             q,
-            "SELECT (SELECT count(s1.id) AS count_1 "
+            "SELECT c.id AS c_id, (SELECT count(s1.id) AS count_1 "
             "FROM s1 LEFT OUTER JOIN s2 ON s1.id = s2.id "
             "WHERE s1.common_id = c.id) AS anon_1, "
-            "c.id AS c_id, s1.id AS s1_id, "
+            "s1.id AS s1_id, "
             "s1.common_id AS s1_common_id, "
             "s1.discriminator_field AS s1_discriminator_field, "
             "s2.id AS s2_id FROM s1 "

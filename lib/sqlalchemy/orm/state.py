@@ -47,7 +47,7 @@ class InstanceState(interfaces.InspectionAttrInfo):
     status within a particular :class:`.Session` and details
     about data on individual attributes.  The public API
     in order to acquire a :class:`.InstanceState` object
-    is to use the :func:`.inspect` system::
+    is to use the :func:`_sa.inspect` system::
 
         >>> from sqlalchemy import inspect
         >>> insp = inspect(some_mapped_object)
@@ -273,7 +273,7 @@ class InstanceState(interfaces.InspectionAttrInfo):
         """Return the mapped identity of the mapped object.
         This is the primary key identity as persisted by the ORM
         which can always be passed directly to
-        :meth:`.Query.get`.
+        :meth:`_query.Query.get`.
 
         Returns ``None`` if the object has no primary key identity.
 
@@ -316,7 +316,7 @@ class InstanceState(interfaces.InspectionAttrInfo):
 
     @util.memoized_property
     def mapper(self):
-        """Return the :class:`.Mapper` used for this mapped object."""
+        """Return the :class:`_orm.Mapper` used for this mapped object."""
         return self.manager.mapper
 
     @property
@@ -570,7 +570,6 @@ class InstanceState(interfaces.InspectionAttrInfo):
 
     def _expire(self, dict_, modified_set):
         self.expired = True
-
         if self.modified:
             modified_set.discard(self)
             self.committed_state.clear()
@@ -665,7 +664,7 @@ class InstanceState(interfaces.InspectionAttrInfo):
             if not self.manager[attr].impl.load_on_unexpire
         )
 
-        self.manager.expired_attribute_loader(self, toload)
+        self.manager.expired_attribute_loader(self, toload, passive)
 
         # if the loader failed, or this
         # instance state didn't have an identity,
@@ -895,7 +894,8 @@ class AttributeState(object):
             The attribute history system tracks changes on a **per flush
             basis**. Each time the :class:`.Session` is flushed, the history
             of each attribute is reset to empty.   The :class:`.Session` by
-            default autoflushes each time a :class:`.Query` is invoked.  For
+            default autoflushes each time a :class:`_query.Query` is invoked.
+            For
             options on how to control this, see :ref:`session_flushing`.
 
 
@@ -921,7 +921,8 @@ class AttributeState(object):
             The attribute history system tracks changes on a **per flush
             basis**. Each time the :class:`.Session` is flushed, the history
             of each attribute is reset to empty.   The :class:`.Session` by
-            default autoflushes each time a :class:`.Query` is invoked.  For
+            default autoflushes each time a :class:`_query.Query` is invoked.
+            For
             options on how to control this, see :ref:`session_flushing`.
 
         .. seealso::

@@ -8,6 +8,8 @@
 """SQLAlchemy ORM exceptions."""
 from .. import exc as sa_exc
 from .. import util
+from ..exc import MultipleResultsFound  # noqa
+from ..exc import NoResultFound  # noqa
 
 
 NO_STATE = (AttributeError, KeyError)
@@ -111,7 +113,7 @@ class ObjectDeletedError(sa_exc.InvalidRequestError):
     row corresponding to an object's known primary key identity.
 
     A refresh operation proceeds when an expired attribute is
-    accessed on an object, or when :meth:`.Query.get` is
+    accessed on an object, or when :meth:`_query.Query.get` is
     used to retrieve an object which is, upon retrieval, detected
     as expired.   A SELECT is emitted for the target row
     based on primary key; if no row is returned, this
@@ -144,14 +146,6 @@ class ObjectDeletedError(sa_exc.InvalidRequestError):
 
 class UnmappedColumnError(sa_exc.InvalidRequestError):
     """Mapping operation was requested on an unknown column."""
-
-
-class NoResultFound(sa_exc.InvalidRequestError):
-    """A database result was required but none was found."""
-
-
-class MultipleResultsFound(sa_exc.InvalidRequestError):
-    """A single database result was required but more than one were found."""
 
 
 class LoaderStrategyException(sa_exc.InvalidRequestError):
@@ -202,9 +196,7 @@ def _default_unmapped(cls):
 
     try:
         mappers = base.manager_of_class(cls).mappers
-    except NO_STATE:
-        mappers = {}
-    except TypeError:
+    except (TypeError,) + NO_STATE:
         mappers = {}
     name = _safe_cls_name(cls)
 

@@ -37,6 +37,7 @@ from .selectable import Join
 from .selectable import ScalarSelect
 from .selectable import SelectBase
 from .selectable import TableClause
+from .traversals import HasCacheKey  # noqa
 from .. import exc
 from .. import util
 
@@ -249,7 +250,9 @@ def find_tables(
         _visitors["join"] = tables.append
 
     if include_aliases:
-        _visitors["alias"] = tables.append
+        _visitors["alias"] = _visitors["subquery"] = _visitors[
+            "tablesample"
+        ] = _visitors["lateral"] = tables.append
 
     if include_crud:
         _visitors["insert"] = _visitors["update"] = _visitors[
@@ -265,7 +268,7 @@ def find_tables(
 
     _visitors["table"] = tables.append
 
-    visitors.traverse(clause, {"column_collections": False}, _visitors)
+    visitors.traverse(clause, {}, _visitors)
     return tables
 
 
@@ -819,9 +822,14 @@ class ClauseAdapter(visitors.ReplacingExternalTraversal):
                 # is another join or selectable that contains a table which our
                 # selectable derives from, that we want to process
                 return None
+
         elif not isinstance(col, ColumnElement):
             return None
-        elif self.include_fn and not self.include_fn(col):
+
+        if "adapt_column" in col._annotations:
+            col = col._annotations["adapt_column"]
+
+        if self.include_fn and not self.include_fn(col):
             return None
         elif self.exclude_fn and self.exclude_fn(col):
             return None
@@ -919,6 +927,14 @@ class ColumnAdapter(ClauseAdapter):
     adapt_clause = traverse
     adapt_list = ClauseAdapter.copy_and_process
 
+    def adapt_check_present(self, col):
+        newcol = self.columns[col]
+
+        if newcol is col and self._corresponding_column(col, True) is None:
+            return None
+
+        return newcol
+
     def _locate_col(self, col):
 
         c = ClauseAdapter.traverse(self, col)
@@ -943,3 +959,25 @@ class ColumnAdapter(ClauseAdapter):
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.columns = util.WeakPopulateDict(self._locate_col)
+
+
+def _entity_namespace_key(entity, key):
+    """Return an entry from an entity_namespace.
+
+
+    Raises :class:`_exc.InvalidRequestError` rather than attribute error
+    on not found.
+
+    """
+
+    ns = entity.entity_namespace
+    try:
+        return getattr(ns, key)
+    except AttributeError as err:
+        util.raise_(
+            exc.InvalidRequestError(
+                'Entity namespace for "%s" has no property "%s"'
+                % (entity, key)
+            ),
+            replace_context=err,
+        )

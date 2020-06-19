@@ -49,6 +49,7 @@ from .. import event
 from .. import inspection
 from .. import util
 from ..sql import base as sql_base
+from ..sql import roles
 from ..sql import visitors
 
 
@@ -57,7 +58,8 @@ class QueryableAttribute(
     interfaces._MappedAttribute,
     interfaces.InspectionAttr,
     interfaces.PropComparator,
-    sql_base.HasCacheKey,
+    roles.JoinTargetRole,
+    sql_base.MemoizedHasCacheKey,
 ):
     """Base class for :term:`descriptor` objects that intercept
     attribute events on behalf of a :class:`.MapperProperty`
@@ -72,9 +74,9 @@ class QueryableAttribute(
 
         :class:`.MapperProperty`
 
-        :attr:`.Mapper.all_orm_descriptors`
+        :attr:`_orm.Mapper.all_orm_descriptors`
 
-        :attr:`.Mapper.attrs`
+        :attr:`_orm.Mapper.attrs`
     """
 
     is_attribute = True
@@ -83,16 +85,16 @@ class QueryableAttribute(
         self,
         class_,
         key,
+        parententity,
         impl=None,
         comparator=None,
-        parententity=None,
         of_type=None,
     ):
         self.class_ = class_
         self.key = key
+        self._parententity = parententity
         self.impl = impl
         self.comparator = comparator
-        self._parententity = parententity
         self._of_type = of_type
 
         manager = manager_of_class(class_)
@@ -107,11 +109,23 @@ class QueryableAttribute(
                         self.dispatch._active_history = True
 
     _cache_key_traversal = [
-        # ("class_", visitors.ExtendedInternalTraversal.dp_plain_obj),
         ("key", visitors.ExtendedInternalTraversal.dp_string),
         ("_parententity", visitors.ExtendedInternalTraversal.dp_multi),
         ("_of_type", visitors.ExtendedInternalTraversal.dp_multi),
     ]
+
+    def __reduce__(self):
+        # this method is only used in terms of the
+        # sqlalchemy.ext.serializer extension
+        return (
+            _queryable_attribute_unreduce,
+            (
+                self.key,
+                self._parententity.mapper.class_,
+                self._parententity,
+                self._parententity.entity,
+            ),
+        )
 
     @util.memoized_property
     def _supports_population(self):
@@ -134,12 +148,13 @@ class QueryableAttribute(
 
         * If the attribute is a column-mapped property, i.e.
           :class:`.ColumnProperty`, which is mapped directly
-          to a schema-level :class:`.Column` object, this attribute
+          to a schema-level :class:`_schema.Column` object, this attribute
           will return the :attr:`.SchemaItem.info` dictionary associated
-          with the core-level :class:`.Column` object.
+          with the core-level :class:`_schema.Column` object.
 
         * If the attribute is a :class:`.ColumnProperty` but is mapped to
-          any other kind of SQL expression other than a :class:`.Column`,
+          any other kind of SQL expression other than a
+          :class:`_schema.Column`,
           the attribute will refer to the :attr:`.MapperProperty.info`
           dictionary associated directly with the :class:`.ColumnProperty`,
           assuming the SQL expression itself does not have its own ``.info``
@@ -154,7 +169,7 @@ class QueryableAttribute(
         * To access the :attr:`.MapperProperty.info` dictionary of the
           :class:`.MapperProperty` unconditionally, including for a
           :class:`.ColumnProperty` that's associated directly with a
-          :class:`.schema.Column`, the attribute can be referred to using
+          :class:`_schema.Column`, the attribute can be referred to using
           :attr:`.QueryableAttribute.property` attribute, as
           ``MyClass.someattribute.property.info``.
 
@@ -171,7 +186,7 @@ class QueryableAttribute(
     def parent(self):
         """Return an inspection instance representing the parent.
 
-        This will be either an instance of :class:`.Mapper`
+        This will be either an instance of :class:`_orm.Mapper`
         or :class:`.AliasedInsp`, depending upon the nature
         of the parent entity which this attribute is associated
         with.
@@ -182,8 +197,12 @@ class QueryableAttribute(
     @util.memoized_property
     def expression(self):
         return self.comparator.__clause_element__()._annotate(
-            {"orm_key": self.key}
+            {"orm_key": self.key, "entity_namespace": self._entity_namespace}
         )
+
+    @property
+    def _entity_namespace(self):
+        return self._parententity
 
     @property
     def _annotations(self):
@@ -191,6 +210,10 @@ class QueryableAttribute(
 
     def __clause_element__(self):
         return self.expression
+
+    @property
+    def _from_objects(self):
+        return self.expression._from_objects
 
     def _bulk_update_tuples(self, value):
         """Return setter tuples for a bulk UPDATE."""
@@ -207,14 +230,14 @@ class QueryableAttribute(
             parententity=adapt_to_entity,
         )
 
-    def of_type(self, cls):
+    def of_type(self, entity):
         return QueryableAttribute(
             self.class_,
             self.key,
-            self.impl,
-            self.comparator.of_type(cls),
             self._parententity,
-            of_type=cls,
+            impl=self.impl,
+            comparator=self.comparator.of_type(entity),
+            of_type=inspection.inspect(entity),
         )
 
     def label(self, name):
@@ -264,6 +287,15 @@ class QueryableAttribute(
         return self.comparator.property
 
 
+def _queryable_attribute_unreduce(key, mapped_class, parententity, entity):
+    # this method is only used in terms of the
+    # sqlalchemy.ext.serializer extension
+    if parententity.is_aliased_class:
+        return entity._get_from_serialized(key, mapped_class, parententity)
+    else:
+        return getattr(entity, key)
+
+
 class InstrumentedAttribute(QueryableAttribute):
     """Class bound instrumented attribute which adds basic
     :term:`descriptor` methods.
@@ -272,6 +304,8 @@ class InstrumentedAttribute(QueryableAttribute):
 
 
     """
+
+    inherit_cache = True
 
     def __set__(self, instance, value):
         self.impl.set(
@@ -290,6 +324,11 @@ class InstrumentedAttribute(QueryableAttribute):
             return dict_[self.key]
         else:
             return self.impl.get(instance_state(instance), dict_)
+
+
+HasEntityNamespace = util.namedtuple(
+    "HasEntityNamespace", ["entity_namespace"]
+)
 
 
 def create_proxied_attribute(descriptor):
@@ -335,6 +374,15 @@ def create_proxied_attribute(descriptor):
                 self.original_property is not None
                 and getattr(self.class_, self.key).impl.uses_objects
             )
+
+        @property
+        def _entity_namespace(self):
+            if hasattr(self._comparator, "_parententity"):
+                return self._comparator._parententity
+            else:
+                # used by hybrid attributes which try to remain
+                # agnostic of any ORM concepts like mappers
+                return HasEntityNamespace(self.class_)
 
         @property
         def property(self):
@@ -446,10 +494,10 @@ class Event(object):
 
     .. versionadded:: 0.9.0
 
-    :var impl: The :class:`.AttributeImpl` which is the current event
+    :attribute impl: The :class:`.AttributeImpl` which is the current event
      initiator.
 
-    :var op: The symbol :attr:`.OP_APPEND`, :attr:`.OP_REMOVE`,
+    :attribute op: The symbol :attr:`.OP_APPEND`, :attr:`.OP_REMOVE`,
      :attr:`.OP_REPLACE`, or :attr:`.OP_BULK_REPLACE`, indicating the
      source operation.
 
@@ -1608,7 +1656,7 @@ class History(util.namedtuple("History", ["added", "unchanged", "deleted"])):
     attribute.
 
     The easiest way to get a :class:`.History` object for a particular
-    attribute on an object is to use the :func:`.inspect` function::
+    attribute on an object is to use the :func:`_sa.inspect` function::
 
         from sqlalchemy import inspect
 
@@ -1811,18 +1859,6 @@ def get_history(obj, key, passive=PASSIVE_OFF):
         using loader callables if the value is not locally present.
 
     """
-    if passive is True:
-        util.warn_deprecated(
-            "Passing True for 'passive' is deprecated. "
-            "Use attributes.PASSIVE_NO_INITIALIZE"
-        )
-        passive = PASSIVE_NO_INITIALIZE
-    elif passive is False:
-        util.warn_deprecated(
-            "Passing False for 'passive' is "
-            "deprecated.  Use attributes.PASSIVE_OFF"
-        )
-        passive = PASSIVE_OFF
 
     return get_state_history(instance_state(obj), key, passive)
 

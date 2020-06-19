@@ -442,7 +442,7 @@ class AttributesTest(fixtures.ORMTest):
 
         data = {"a": "this is a", "b": 12}
 
-        def loader(state, keys):
+        def loader(state, keys, passive):
             for k in keys:
                 state.dict[k] = data[k]
             return attributes.ATTR_WAS_SET
@@ -488,7 +488,7 @@ class AttributesTest(fixtures.ORMTest):
     def test_deferred_pickleable(self):
         data = {"a": "this is a", "b": 12}
 
-        def loader(state, keys):
+        def loader(state, keys, passive):
             for k in keys:
                 state.dict[k] = data[k]
             return attributes.ATTR_WAS_SET
@@ -1636,7 +1636,9 @@ class PendingBackrefTest(fixtures.ORMTest):
 
         # then this would fail.
         eq_(
-            Blog.posts.impl.get_history(state, dict_, passive=True),
+            Blog.posts.impl.get_history(
+                state, dict_, passive=attributes.PASSIVE_NO_INITIALIZE
+            ),
             ([p2], (), ()),
         )
 
@@ -2242,7 +2244,7 @@ class HistoryTest(fixtures.TestBase):
         state.dict.pop("someattr", None)
         state.expired_attributes.add("someattr")
 
-        def scalar_loader(state, toload):
+        def scalar_loader(state, toload, passive):
             state.dict["someattr"] = "one"
 
         state.manager.expired_attribute_loader = scalar_loader
@@ -2901,27 +2903,6 @@ class HistoryTest(fixtures.TestBase):
         eq_(
             attributes.get_state_history(attributes.instance_state(b2), "foo"),
             ([f1], (), ()),
-        )
-
-    def test_deprecated_flags(self):
-        assert_raises_message(
-            sa_exc.SADeprecationWarning,
-            "Passing True for 'passive' is deprecated. "
-            "Use attributes.PASSIVE_NO_INITIALIZE",
-            attributes.get_history,
-            object(),
-            "foo",
-            True,
-        )
-
-        assert_raises_message(
-            sa_exc.SADeprecationWarning,
-            "Passing False for 'passive' is deprecated.  "
-            "Use attributes.PASSIVE_OFF",
-            attributes.get_history,
-            object(),
-            "foo",
-            False,
         )
 
 

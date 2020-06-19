@@ -180,7 +180,7 @@ class LikeQueryTest(BakedTest):
 
         assert_raises_message(
             orm_exc.MultipleResultsFound,
-            "Multiple rows were found for one_or_none()",
+            "Multiple rows were found when one or none was required",
             bq(Session()).one_or_none,
         )
 
@@ -192,7 +192,7 @@ class LikeQueryTest(BakedTest):
 
         assert_raises_message(
             orm_exc.NoResultFound,
-            "No row was found for one()",
+            "No row was found when one was required",
             bq(Session()).one,
         )
 
@@ -213,7 +213,7 @@ class LikeQueryTest(BakedTest):
 
         assert_raises_message(
             orm_exc.MultipleResultsFound,
-            "Multiple rows were found for one()",
+            "Multiple rows were found when exactly one was required",
             bq(Session()).one,
         )
 
@@ -289,6 +289,7 @@ class LikeQueryTest(BakedTest):
         # with multiple params, the **kwargs will be used
         bq += lambda q: q.filter(User.id == bindparam("anid"))
         eq_(bq(sess).params(uname="fred", anid=9).count(), 1)
+
         eq_(
             # wrong id, so 0 results:
             bq(sess).params(uname="fred", anid=8).count(),
@@ -385,8 +386,15 @@ class ResultPostCriteriaTest(BakedTest):
         with testing.db.connect() as conn:
 
             @event.listens_for(conn, "before_execute")
-            def before_execute(conn, clauseelement, multiparams, params):
-                assert "yes" in conn._execution_options
+            def before_execute(
+                conn, clauseelement, multiparams, params, execution_options
+            ):
+                # execution options are kind of moving around a bit,
+                # test both places
+                assert (
+                    "yes" in clauseelement._execution_options
+                    or "yes" in execution_options
+                )
 
             bq = self.bakery(lambda s: s.query(User.id).order_by(User.id))
 
@@ -802,9 +810,7 @@ class ResultTest(BakedTest):
         Address = self.classes.Address
         Order = self.classes.Order
 
-        # Override the default bakery for one with a smaller size. This used to
-        # trigger a bug when unbaking subqueries.
-        self.bakery = baked.bakery(size=3)
+        self.bakery = baked.bakery()
         base_bq = self.bakery(lambda s: s.query(User))
 
         base_bq += lambda q: q.options(
@@ -838,6 +844,7 @@ class ResultTest(BakedTest):
             for cond1, cond2 in itertools.product(
                 *[(False, True) for j in range(2)]
             ):
+                print("HI----")
                 bq = base_bq._clone()
 
                 sess = Session()
@@ -901,7 +908,7 @@ class ResultTest(BakedTest):
             )
         ]
 
-        self.bakery = baked.bakery(size=3)
+        self.bakery = baked.bakery()
 
         bq = self.bakery(lambda s: s.query(User))
 
@@ -1199,7 +1206,7 @@ class LazyLoaderTest(testing.AssertsCompiledSQL, BakedTest):
                 ad.dingalings
         l2 = len(lru)
         eq_(l1, 0)
-        eq_(l2, 1)
+        eq_(l2, 0)
 
     def test_unsafe_bound_option_cancels_bake(self):
         User, Address, Dingaling = self._o2m_twolevel_fixture(lazy="joined")
@@ -1230,7 +1237,7 @@ class LazyLoaderTest(testing.AssertsCompiledSQL, BakedTest):
                 ad.dingalings
         l2 = len(lru)
         eq_(l1, 0)
-        eq_(l2, 1)
+        eq_(l2, 0)
 
     def test_safe_unbound_option_allows_bake(self):
         User, Address, Dingaling = self._o2m_twolevel_fixture(lazy="joined")
@@ -1286,33 +1293,72 @@ class LazyLoaderTest(testing.AssertsCompiledSQL, BakedTest):
 
     def _test_baked_lazy_loading_relationship_flag(self, flag):
         User, Address = self._o2m_fixture(bake_queries=flag)
+        from sqlalchemy import inspect
 
-        sess = Session()
-        u1 = sess.query(User).first()
+        address_mapper = inspect(Address)
+        sess = Session(testing.db)
 
-        from sqlalchemy.orm import Query
+        # there's no event in the compile process either at the ORM
+        # or core level and it is not easy to patch.  the option object
+        # is the one thing that will get carried into the lazyload from the
+        # outside and invoked on a per-compile basis
+        mock_opt = mock.Mock(
+            _is_compile_state=True,
+            propagate_to_loaders=True,
+            _gen_cache_key=lambda *args: ("hi",),
+            _generate_path_cache_key=lambda path: ("hi",),
+        )
 
-        canary = mock.Mock()
+        u1 = sess.query(User).options(mock_opt).first()
 
-        # I would think Mock can do this but apparently
-        # it cannot (wrap / autospec don't work together)
-        real_compile_context = Query._compile_context
+        @event.listens_for(sess, "do_orm_execute")
+        def _my_compile_state(context):
+            if (
+                context.statement._raw_columns[0]._annotations["parententity"]
+                is address_mapper
+            ):
+                mock_opt.orm_execute()
 
-        def _my_compile_context(*arg, **kw):
-            if arg[0].column_descriptions[0]["entity"] is Address:
-                canary()
-            return real_compile_context(*arg, **kw)
+        u1.addresses
 
-        with mock.patch.object(Query, "_compile_context", _my_compile_context):
-            u1.addresses
-
-            sess.expire(u1)
-            u1.addresses
+        sess.expire(u1)
+        u1.addresses
 
         if flag:
-            eq_(canary.call_count, 1)
+            eq_(
+                mock_opt.mock_calls,
+                [
+                    mock.call.process_query(mock.ANY),
+                    mock.call.process_compile_state(mock.ANY),  # query.first()
+                    mock.call.process_query_conditionally(mock.ANY),
+                    mock.call.orm_execute(),  # lazyload addresses
+                    mock.call.process_compile_state(mock.ANY),  # emit lazyload
+                    mock.call.process_compile_state(
+                        mock.ANY
+                    ),  # load scalar attributes for user
+                    # lazyload addresses, no call to process_compile_state
+                    mock.call.orm_execute(),
+                ],
+            )
         else:
-            eq_(canary.call_count, 2)
+            eq_(
+                mock_opt.mock_calls,
+                [
+                    mock.call.process_query(mock.ANY),
+                    mock.call.process_compile_state(mock.ANY),  # query.first()
+                    mock.call.process_query_conditionally(mock.ANY),
+                    mock.call.orm_execute(),  # lazyload addresses
+                    mock.call.process_compile_state(mock.ANY),  # emit_lazyload
+                    mock.call.process_compile_state(
+                        mock.ANY
+                    ),  # load_scalar_attributes for user
+                    mock.call.process_query_conditionally(mock.ANY),
+                    mock.call.orm_execute(),  # lazyload addresses
+                    mock.call.process_compile_state(
+                        mock.ANY
+                    ),  # emit_lazyload, here the query was not cached
+                ],
+            )
 
     def test_baked_lazy_loading_option_o2m(self):
         User, Address = self._o2m_fixture()
@@ -1338,8 +1384,8 @@ class LazyLoaderTest(testing.AssertsCompiledSQL, BakedTest):
             for cond1, cond2 in itertools.product(
                 *[(False, True) for j in range(2)]
             ):
-                bq = base_bq._clone()
 
+                bq = base_bq._clone()
                 sess = Session()
 
                 if cond1:
@@ -1569,59 +1615,56 @@ class CustomIntegrationTest(testing.AssertsCompiledSQL, BakedTest):
         return User, Address
 
     def _query_fixture(self):
-        from sqlalchemy.orm.query import Query, _generative
+        from sqlalchemy.orm.query import Query
 
         class CachingQuery(Query):
             cache = {}
 
-            @_generative
             def set_cache_key(self, key):
-                self._cache_key = key
+                return self.execution_options(_cache_key=key)
 
-            def __iter__(self):
-                super_ = super(CachingQuery, self)
+            def set_cache_key_for_path(self, path, key):
+                return self.execution_options(**{"_cache_key_%s" % path: key})
 
-                if hasattr(self, "_cache_key"):
-                    return self.get_value(
-                        createfunc=lambda: list(super_.__iter__())
-                    )
-                else:
-                    return super_.__iter__()
+        def get_value(cache_key, cache, createfunc):
+            if cache_key in cache:
+                return cache[cache_key]()
+            else:
+                cache[cache_key] = retval = createfunc().freeze()
+                return retval()
 
-            def _execute_and_instances(self, context):
-                super_ = super(CachingQuery, self)
+        s1 = Session(query_cls=CachingQuery)
 
-                if context.query is not self and hasattr(self, "_cache_key"):
-                    return self.get_value(
-                        createfunc=lambda: list(
-                            super_._execute_and_instances(context)
-                        )
-                    )
-                else:
-                    return super_._execute_and_instances(context)
+        @event.listens_for(s1, "do_orm_execute", retval=True)
+        def do_orm_execute(orm_context):
+            ckey = None
+            for opt in orm_context.user_defined_options:
+                ckey = opt.get_cache_key(orm_context)
+                if ckey:
+                    break
+            else:
+                if "_cache_key" in orm_context.merged_execution_options:
+                    ckey = orm_context.merged_execution_options["_cache_key"]
 
-            def get_value(self, createfunc):
-                if self._cache_key in self.cache:
-                    return iter(self.cache[self._cache_key])
-                else:
-                    self.cache[self._cache_key] = retval = createfunc()
-                    return iter(retval)
+            if ckey is not None:
+                return get_value(
+                    ckey, CachingQuery.cache, orm_context.invoke_statement,
+                )
 
-        return Session(query_cls=CachingQuery)
+        return s1
 
     def _option_fixture(self):
-        from sqlalchemy.orm.interfaces import MapperOption
+        from sqlalchemy.orm.interfaces import UserDefinedOption
 
-        class RelationshipCache(MapperOption):
+        class RelationshipCache(UserDefinedOption):
 
             propagate_to_loaders = True
 
-            def process_query_conditionally(self, query):
-                if query._current_path:
-                    query._cache_key = "user7_addresses"
-
-            def _generate_path_cache_key(self, path):
-                return None
+            def get_cache_key(self, orm_context):
+                if orm_context.loader_strategy_path:
+                    return "user7_addresses"
+                else:
+                    return None
 
         return RelationshipCache()
 
@@ -1636,9 +1679,24 @@ class CustomIntegrationTest(testing.AssertsCompiledSQL, BakedTest):
 
         eq_(q.all(), [User(id=7, addresses=[Address(id=1)])])
 
-        eq_(q.cache, {"user7": [User(id=7, addresses=[Address(id=1)])]})
+        eq_(list(q.cache), ["user7"])
 
         eq_(q.all(), [User(id=7, addresses=[Address(id=1)])])
+
+    def test_non_baked_tuples(self):
+        User, Address = self._o2m_fixture()
+
+        sess = self._query_fixture()
+        q = sess._query_cls
+        eq_(q.cache, {})
+
+        q = sess.query(User).filter(User.id == 7).set_cache_key("user7")
+
+        eq_(sess.execute(q).all(), [(User(id=7, addresses=[Address(id=1)]),)])
+
+        eq_(list(q.cache), ["user7"])
+
+        eq_(sess.execute(q).all(), [(User(id=7, addresses=[Address(id=1)]),)])
 
     def test_use_w_baked(self):
         User, Address = self._o2m_fixture()
@@ -1653,7 +1711,7 @@ class CustomIntegrationTest(testing.AssertsCompiledSQL, BakedTest):
 
         eq_(base_bq(sess).all(), [User(id=7, addresses=[Address(id=1)])])
 
-        eq_(q.cache, {"user7": [User(id=7, addresses=[Address(id=1)])]})
+        eq_(list(q.cache), ["user7"])
 
         eq_(base_bq(sess).all(), [User(id=7, addresses=[Address(id=1)])])
 
@@ -1670,7 +1728,7 @@ class CustomIntegrationTest(testing.AssertsCompiledSQL, BakedTest):
         u = q.first()
         eq_(u.addresses, [Address(id=1)])
 
-        eq_(q.cache, {"user7_addresses": [Address(id=1)]})
+        eq_(list(q.cache), ["user7_addresses"])
 
         sess.close()
 
@@ -1679,4 +1737,5 @@ class CustomIntegrationTest(testing.AssertsCompiledSQL, BakedTest):
 
         u = q.first()
         eq_(u.addresses, [Address(id=1)])
-        eq_(q.cache, {"user7_addresses": [Address(id=1)]})
+
+        eq_(list(q.cache), ["user7_addresses"])

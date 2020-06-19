@@ -17,6 +17,7 @@ import contextlib
 import os
 import platform
 import pstats
+import re
 import sys
 
 from . import config
@@ -64,7 +65,7 @@ class ProfileStatsFile(object):
 
     """
 
-    def __init__(self, filename, sort="cumulative"):
+    def __init__(self, filename, sort="cumulative", dump=None):
         self.force_write = (
             config.options is not None and config.options.force_write_profiles
         )
@@ -76,6 +77,7 @@ class ProfileStatsFile(object):
         self.data = collections.defaultdict(
             lambda: collections.defaultdict(dict)
         )
+        self.dump = dump
         self.sort = sort
         self._read()
         if self.write:
@@ -236,7 +238,7 @@ def function_call_count(variance=0.05, times=1, warmup=0):
 
     """
 
-    # use signature-rewriting decorator function so that py.test fixtures
+    # use signature-rewriting decorator function so that pytest fixtures
     # still work on py27.  In Py3, update_wrapper() alone is good enough,
     # likely due to the introduction of __signature__.
 
@@ -292,8 +294,15 @@ def count_functions(variance=0.05):
         line_no, expected_count = expected
 
     print(("Pstats calls: %d Expected %s" % (callcount, expected_count)))
-    stats.sort_stats(_profile_stats.sort)
+    stats.sort_stats(*re.split(r"[, ]", _profile_stats.sort))
     stats.print_stats()
+    if _profile_stats.dump:
+        base, ext = os.path.splitext(_profile_stats.dump)
+        test_name = _current_test.split(".")[-1]
+        dumpfile = "%s_%s%s" % (base, test_name, ext or ".profile")
+        stats.dump_stats(dumpfile)
+        print("Dumped stats to file %s" % dumpfile)
+    # stats.print_callers()
     if _profile_stats.force_write:
         _profile_stats.replace(callcount)
     elif expected_count:

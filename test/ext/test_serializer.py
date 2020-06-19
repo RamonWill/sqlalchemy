@@ -81,7 +81,7 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
         configure_mappers()
 
     @classmethod
-    def insert_data(cls):
+    def insert_data(cls, connection):
         params = [
             dict(list(zip(("id", "name"), column_values)))
             for column_values in [
@@ -91,8 +91,9 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
                 (10, "chuck"),
             ]
         ]
-        users.insert().execute(params)
-        addresses.insert().execute(
+        connection.execute(users.insert(), params)
+        connection.execute(
+            addresses.insert(),
             [
                 dict(list(zip(("id", "user_id", "email"), column_values)))
                 for column_values in [
@@ -102,7 +103,7 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
                     (4, 8, "ed@lala.com"),
                     (5, 9, "fred@fred.com"),
                 ]
-            ]
+            ],
         )
 
     def test_tables(self):
@@ -175,7 +176,9 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
         eq_(
             q2.join(User.addresses)
             .filter(Address.email == "ed@bettyboop.com")
-            .value(func.count(literal_column("*"))),
+            .enable_eagerloads(False)
+            .with_entities(func.count(literal_column("*")))
+            .scalar(),
             1,
         )
         u1 = Session.query(User).get(8)
@@ -203,7 +206,7 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
         )
         q2 = serializer.loads(serializer.dumps(q, -1), users.metadata, Session)
         eq_(q2.all(), [User(name="fred")])
-        eq_(list(q2.values(User.id, User.name)), [(9, "fred")])
+        eq_(list(q2.with_entities(User.id, User.name)), [(9, "fred")])
 
     @testing.requires.non_broken_pickle
     def test_query_three(self):
@@ -220,8 +223,8 @@ class SerializeTest(AssertsCompiledSQL, fixtures.MappedTest):
             eq_(q2.all(), [User(name="fred")])
 
             # try to pull out the aliased entity here...
-            ua_2 = q2._entities[0].entity_zero.entity
-            eq_(list(q2.values(ua_2.id, ua_2.name)), [(9, "fred")])
+            ua_2 = q2._compile_state()._entities[0].entity_zero.entity
+            eq_(list(q2.with_entities(ua_2.id, ua_2.name)), [(9, "fred")])
 
     def test_annotated_one(self):
         j = join(users, addresses)._annotate({"foo": "bar"})

@@ -6,6 +6,7 @@ from sqlalchemy.orm import create_session
 from sqlalchemy.orm import mapper
 from sqlalchemy.orm import polymorphic_union
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql.selectable import LABEL_STYLE_TABLENAME_PLUS_COL
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import config
 from sqlalchemy.testing import fixtures
@@ -53,6 +54,8 @@ class _PolymorphicFixtureBase(fixtures.MappedTest, AssertsCompiledSQL):
     run_inserts = "once"
     run_setup_mappers = "once"
     run_deletes = None
+
+    label_style = LABEL_STYLE_TABLENAME_PLUS_COL
 
     @classmethod
     def define_tables(cls, metadata):
@@ -151,7 +154,17 @@ class _PolymorphicFixtureBase(fixtures.MappedTest, AssertsCompiledSQL):
         )
 
     @classmethod
-    def insert_data(cls):
+    def setup_classes(cls):
+        cls.classes["Engineer"] = Engineer
+        cls.classes["Person"] = Person
+        cls.classes["Manager"] = Manager
+        cls.classes["Machine"] = Machine
+        cls.classes["Boss"] = Boss
+        cls.classes["Company"] = Company
+        cls.classes["Paperwork"] = Paperwork
+
+    @classmethod
+    def insert_data(cls, connection):
 
         cls.e1 = e1 = Engineer(
             name="dilbert",
@@ -209,7 +222,7 @@ class _PolymorphicFixtureBase(fixtures.MappedTest, AssertsCompiledSQL):
         cls.c2 = c2 = Company(name="Elbonia, Inc.")
         c2.employees = [e3]
 
-        sess = create_session()
+        sess = create_session(connection)
         sess.add(c1)
         sess.add(c2)
         sess.flush()
@@ -417,14 +430,16 @@ class _PolymorphicAliasedJoins(_PolymorphicFixtureBase):
         person_join = (
             people.outerjoin(engineers)
             .outerjoin(managers)
-            .select(use_labels=True)
-            .alias("pjoin")
+            .select()
+            ._set_label_style(cls.label_style)
+            .subquery("pjoin")
         )
         manager_join = (
             people.join(managers)
             .outerjoin(boss)
-            .select(use_labels=True)
-            .alias("mjoin")
+            .select()
+            ._set_label_style(cls.label_style)
+            .subquery("mjoin")
         )
         person_with_polymorphic = ([Person, Manager, Engineer], person_join)
         manager_with_polymorphic = ("*", manager_join)

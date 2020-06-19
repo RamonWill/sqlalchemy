@@ -439,7 +439,9 @@ class LazyTest(_fixtures.FixtureTest):
             def process_query_conditionally(self, query):
                 """process query during a lazyload"""
                 canary()
-                query._params = query._params.union(dict(name=self.crit))
+                params = dict(query.load_options._params)
+                query.load_options += {"_params": params}
+                query.load_options._params.update(dict(name=self.crit))
 
         s = Session()
         ed = s.query(User).options(MyOption("ed")).filter_by(name="ed").one()
@@ -1248,16 +1250,18 @@ class CorrelatedTest(fixtures.MappedTest):
         )
 
     @classmethod
-    def insert_data(cls):
+    def insert_data(cls, connection):
         stuff, user_t = cls.tables.stuff, cls.tables.user_t
 
-        user_t.insert().execute(
+        connection.execute(
+            user_t.insert(),
             {"id": 1, "name": "user1"},
             {"id": 2, "name": "user2"},
             {"id": 3, "name": "user3"},
         )
 
-        stuff.insert().execute(
+        connection.execute(
+            stuff.insert(),
             {"id": 1, "user_id": 1, "date": datetime.date(2007, 10, 15)},
             {"id": 2, "user_id": 1, "date": datetime.date(2007, 12, 15)},
             {"id": 3, "user_id": 1, "date": datetime.date(2007, 11, 15)},

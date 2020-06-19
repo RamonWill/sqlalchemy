@@ -15,6 +15,8 @@ raised as a result of DBAPI exceptions are all subclasses of
 
 from .util import compat
 
+_version_token = None
+
 
 class SQLAlchemyError(Exception):
     """Generic error class."""
@@ -33,7 +35,7 @@ class SQLAlchemyError(Exception):
         else:
             return (
                 "(Background on this error at: "
-                "http://sqlalche.me/e/%s)" % (self.code,)
+                "http://sqlalche.me/e/%s/%s)" % (_version_token, self.code,)
             )
 
     def _message(self, as_unicode=compat.py3k):
@@ -127,8 +129,9 @@ class CircularDependencyError(SQLAlchemyError):
       or pre-deassociate one of the foreign key constrained values.
       The ``post_update`` flag described at :ref:`post_update` can resolve
       this cycle.
-    * In a :attr:`.MetaData.sorted_tables` operation, two :class:`.ForeignKey`
-      or :class:`.ForeignKeyConstraint` objects mutually refer to each
+    * In a :attr:`_schema.MetaData.sorted_tables` operation, two
+      :class:`_schema.ForeignKey`
+      or :class:`_schema.ForeignKeyConstraint` objects mutually refer to each
       other.  Apply the ``use_alter=True`` flag to one or both,
       see :ref:`use_alter`.
 
@@ -178,7 +181,8 @@ class DisconnectionError(SQLAlchemyError):
     """A disconnect is detected on a raw DB-API connection.
 
     This error is raised and consumed internally by a connection pool.  It can
-    be raised by the :meth:`.PoolEvents.checkout` event so that the host pool
+    be raised by the :meth:`_events.PoolEvents.checkout`
+    event so that the host pool
     forces a retry; the exception will be caught three times in a row before
     the pool gives up and raises :class:`~sqlalchemy.exc.InvalidRequestError`
     regarding the connection attempt.
@@ -191,12 +195,12 @@ class DisconnectionError(SQLAlchemyError):
 class InvalidatePoolError(DisconnectionError):
     """Raised when the connection pool should invalidate all stale connections.
 
-    A subclass of :class:`.DisconnectionError` that indicates that the
+    A subclass of :class:`_exc.DisconnectionError` that indicates that the
     disconnect situation encountered on the connection probably means the
     entire pool should be invalidated, as the database has been restarted.
 
     This exception will be handled otherwise the same way as
-    :class:`.DisconnectionError`, allowing three attempts to reconnect
+    :class:`_exc.DisconnectionError`, allowing three attempts to reconnect
     before giving up.
 
     .. versionadded:: 1.2
@@ -223,6 +227,15 @@ class NoInspectionAvailable(InvalidRequestError):
     no context for inspection."""
 
 
+class PendingRollbackError(InvalidRequestError):
+    """A transaction has failed and needs to be rolled back before
+    continuing.
+
+    .. versionadded:: 1.4
+
+    """
+
+
 class ResourceClosedError(InvalidRequestError):
     """An operation was requested from a connection, cursor, or other
     object that's in a closed state."""
@@ -230,6 +243,29 @@ class ResourceClosedError(InvalidRequestError):
 
 class NoSuchColumnError(KeyError, InvalidRequestError):
     """A nonexistent column is requested from a ``Row``."""
+
+
+class NoResultFound(InvalidRequestError):
+    """A database result was required but none was found.
+
+
+    .. versionchanged:: 1.4  This exception is now part of the
+       ``sqlalchemy.exc`` module in Core, moved from the ORM.  The symbol
+       remains importable from ``sqlalchemy.orm.exc``.
+
+
+    """
+
+
+class MultipleResultsFound(InvalidRequestError):
+    """A single database result was required but more than one were found.
+
+    .. versionchanged:: 1.4  This exception is now part of the
+       ``sqlalchemy.exc`` module in Core, moved from the ORM.  The symbol
+       remains importable from ``sqlalchemy.orm.exc``.
+
+
+    """
 
 
 class NoReferenceError(InvalidRequestError):
@@ -589,6 +625,9 @@ class NotSupportedError(DatabaseError):
 class SADeprecationWarning(DeprecationWarning):
     """Issued for usage of deprecated APIs."""
 
+    deprecated_since = None
+    "Indicates the version that started raising this deprecation warning"
+
 
 class RemovedIn20Warning(SADeprecationWarning):
     """Issued for usage of APIs specifically deprecated in SQLAlchemy 2.0.
@@ -599,12 +638,18 @@ class RemovedIn20Warning(SADeprecationWarning):
 
     """
 
+    deprecated_since = "1.4"
+    "Indicates the version that started raising this deprecation warning"
+
 
 class SAPendingDeprecationWarning(PendingDeprecationWarning):
-    """A similar warning as :class:`.SADeprecationWarning`, this warning
+    """A similar warning as :class:`_exc.SADeprecationWarning`, this warning
     is not used in modern versions of SQLAlchemy.
 
     """
+
+    deprecated_since = None
+    "Indicates the version that started raising this deprecation warning"
 
 
 class SAWarning(RuntimeWarning):

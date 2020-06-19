@@ -107,6 +107,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
                 roles.ExpressionElementRole,
                 c,
                 name=getattr(self, "name", None),
+                apply_propagate_attrs=self,
             )
             for c in clauses
         ]
@@ -115,8 +116,12 @@ class FunctionElement(Executable, ColumnElement, FromClause):
             operator=operators.comma_op, group_contents=True, *args
         ).self_group()
 
-    def _execute_on_connection(self, connection, multiparams, params):
-        return connection._execute_function(self, multiparams, params)
+    def _execute_on_connection(
+        self, connection, multiparams, params, execution_options
+    ):
+        return connection._execute_function(
+            self, multiparams, params, execution_options
+        )
 
     @property
     def columns(self):
@@ -127,7 +132,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         an anonymously named column.
 
         An interim approach to providing named columns for a function
-        as a FROM clause is to build a :func:`~.sql.expression.select` with the
+        as a FROM clause is to build a :func:`_expression.select` with the
         desired columns::
 
             from sqlalchemy.sql import column
@@ -163,7 +168,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
             from sqlalchemy import over
             over(func.row_number(), order_by='x')
 
-        See :func:`~.expression.over` for a full description.
+        See :func:`_expression.over` for a full description.
 
         """
         return Over(
@@ -181,7 +186,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         set aggregate" functions, including :class:`.percentile_cont`,
         :class:`.rank`, :class:`.dense_rank`, etc.
 
-        See :func:`~.expression.within_group` for a full description.
+        See :func:`_expression.within_group` for a full description.
 
         .. versionadded:: 1.1
 
@@ -245,7 +250,8 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         to manipulate the "left" and "right" sides of the ON clause of a JOIN
         expression. The purpose of this method is to provide a SQL function
         construct that can also supply this information to the ORM, when used
-        with the :paramref:`.relationship.primaryjoin` parameter.  The return
+        with the :paramref:`_orm.relationship.primaryjoin` parameter.
+        The return
         value is a containment object called :class:`.FunctionAsBinary`.
 
         An ORM example is as follows::
@@ -300,7 +306,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         return None
 
     def alias(self, name=None, flat=False):
-        r"""Produce a :class:`.Alias` construct against this
+        r"""Produce a :class:`_expression.Alias` construct against this
         :class:`.FunctionElement`.
 
         This construct wraps the function in a named alias which
@@ -332,7 +338,7 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         return Alias._construct(self, name)
 
     def select(self):
-        """Produce a :func:`~.expression.select` construct
+        """Produce a :func:`_expression.select` construct
         against this :class:`.FunctionElement`.
 
         This is shorthand for::
@@ -353,8 +359,8 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         produce a SELECT construct.
 
         Note that :class:`.FunctionElement` can be passed to
-        the :meth:`.Connectable.scalar` method of :class:`.Connection`
-        or :class:`.Engine`.
+        the :meth:`.Connectable.scalar` method of :class:`_engine.Connection`
+        or :class:`_engine.Engine`.
 
         """
         return self.select().execute().scalar()
@@ -367,8 +373,8 @@ class FunctionElement(Executable, ColumnElement, FromClause):
         produce a SELECT construct.
 
         Note that :class:`.FunctionElement` can be passed to
-        the :meth:`.Connectable.execute` method of :class:`.Connection`
-        or :class:`.Engine`.
+        the :meth:`.Connectable.execute` method of :class:`_engine.Connection`
+        or :class:`_engine.Engine`.
 
         """
         return self.select().execute()
@@ -478,7 +484,8 @@ class _FunctionGenerator(object):
     :class:`.Function`.
     This object meets the "column" interface, including comparison and labeling
     functions.  The object can also be passed the :meth:`~.Connectable.execute`
-    method of a :class:`.Connection` or :class:`.Engine`, where it will be
+    method of a :class:`_engine.Connection` or :class:`_engine.Engine`,
+    where it will be
     wrapped inside of a SELECT statement first::
 
         print(connection.execute(func.current_timestamp()).scalar())
@@ -737,13 +744,17 @@ class GenericFunction(util.with_metaclass(_GenericMeta, Function)):
 
     coerce_arguments = True
     _register = False
+    inherit_cache = True
 
     def __init__(self, *args, **kwargs):
         parsed_args = kwargs.pop("_parsed_args", None)
         if parsed_args is None:
             parsed_args = [
                 coercions.expect(
-                    roles.ExpressionElementRole, c, name=self.name
+                    roles.ExpressionElementRole,
+                    c,
+                    name=self.name,
+                    apply_propagate_attrs=self,
                 )
                 for c in args
             ]
@@ -798,6 +809,8 @@ class next_value(GenericFunction):
 
 
 class AnsiFunction(GenericFunction):
+    inherit_cache = True
+
     def __init__(self, *args, **kwargs):
         GenericFunction.__init__(self, *args, **kwargs)
 
@@ -805,9 +818,16 @@ class AnsiFunction(GenericFunction):
 class ReturnTypeFromArgs(GenericFunction):
     """Define a function whose return type is the same as its arguments."""
 
+    inherit_cache = True
+
     def __init__(self, *args, **kwargs):
         args = [
-            coercions.expect(roles.ExpressionElementRole, c, name=self.name)
+            coercions.expect(
+                roles.ExpressionElementRole,
+                c,
+                name=self.name,
+                apply_propagate_attrs=self,
+            )
             for c in args
         ]
         kwargs.setdefault("type_", _type_from_args(args))
@@ -817,30 +837,34 @@ class ReturnTypeFromArgs(GenericFunction):
 
 class coalesce(ReturnTypeFromArgs):
     _has_args = True
+    inherit_cache = True
 
 
 class max(ReturnTypeFromArgs):  # noqa
-    pass
+    inherit_cache = True
 
 
 class min(ReturnTypeFromArgs):  # noqa
-    pass
+    inherit_cache = True
 
 
 class sum(ReturnTypeFromArgs):  # noqa
-    pass
+    inherit_cache = True
 
 
 class now(GenericFunction):  # noqa
     type = sqltypes.DateTime
+    inherit_cache = True
 
 
 class concat(GenericFunction):
     type = sqltypes.String
+    inherit_cache = True
 
 
 class char_length(GenericFunction):
     type = sqltypes.Integer
+    inherit_cache = True
 
     def __init__(self, arg, **kwargs):
         GenericFunction.__init__(self, arg, **kwargs)
@@ -848,6 +872,7 @@ class char_length(GenericFunction):
 
 class random(GenericFunction):
     _has_args = True
+    inherit_cache = True
 
 
 class count(GenericFunction):
@@ -872,6 +897,7 @@ class count(GenericFunction):
 
     """
     type = sqltypes.Integer
+    inherit_cache = True
 
     def __init__(self, expression=None, **kwargs):
         if expression is None:
@@ -881,45 +907,54 @@ class count(GenericFunction):
 
 class current_date(AnsiFunction):
     type = sqltypes.Date
+    inherit_cache = True
 
 
 class current_time(AnsiFunction):
     type = sqltypes.Time
+    inherit_cache = True
 
 
 class current_timestamp(AnsiFunction):
     type = sqltypes.DateTime
+    inherit_cache = True
 
 
 class current_user(AnsiFunction):
     type = sqltypes.String
+    inherit_cache = True
 
 
 class localtime(AnsiFunction):
     type = sqltypes.DateTime
+    inherit_cache = True
 
 
 class localtimestamp(AnsiFunction):
     type = sqltypes.DateTime
+    inherit_cache = True
 
 
 class session_user(AnsiFunction):
     type = sqltypes.String
+    inherit_cache = True
 
 
 class sysdate(AnsiFunction):
     type = sqltypes.DateTime
+    inherit_cache = True
 
 
 class user(AnsiFunction):
     type = sqltypes.String
+    inherit_cache = True
 
 
 class array_agg(GenericFunction):
     """support for the ARRAY_AGG function.
 
     The ``func.array_agg(expr)`` construct returns an expression of
-    type :class:`.types.ARRAY`.
+    type :class:`_types.ARRAY`.
 
     e.g.::
 
@@ -929,16 +964,22 @@ class array_agg(GenericFunction):
 
     .. seealso::
 
-        :func:`.postgresql.array_agg` - PostgreSQL-specific version that
-        returns :class:`.postgresql.ARRAY`, which has PG-specific operators
+        :func:`_postgresql.array_agg` - PostgreSQL-specific version that
+        returns :class:`_postgresql.ARRAY`, which has PG-specific operators
         added.
 
     """
 
     type = sqltypes.ARRAY
+    inherit_cache = True
 
     def __init__(self, *args, **kwargs):
-        args = [coercions.expect(roles.ExpressionElementRole, c) for c in args]
+        args = [
+            coercions.expect(
+                roles.ExpressionElementRole, c, apply_propagate_attrs=self
+            )
+            for c in args
+        ]
 
         default_array_type = kwargs.pop("_default_array_type", sqltypes.ARRAY)
         if "type_" not in kwargs:
@@ -958,6 +999,7 @@ class OrderedSetAgg(GenericFunction):
     :meth:`.FunctionElement.within_group` method."""
 
     array_for_multi_clause = False
+    inherit_cache = True
 
     def within_group_type(self, within_group):
         func_clauses = self.clause_expr.element
@@ -980,6 +1022,8 @@ class mode(OrderedSetAgg):
 
     """
 
+    inherit_cache = True
+
 
 class percentile_cont(OrderedSetAgg):
     """implement the ``percentile_cont`` ordered-set aggregate function.
@@ -988,7 +1032,7 @@ class percentile_cont(OrderedSetAgg):
     modifier to supply a sort expression to operate upon.
 
     The return type of this function is the same as the sort expression,
-    or if the arguments are an array, an :class:`.types.ARRAY` of the sort
+    or if the arguments are an array, an :class:`_types.ARRAY` of the sort
     expression's type.
 
     .. versionadded:: 1.1
@@ -996,6 +1040,7 @@ class percentile_cont(OrderedSetAgg):
     """
 
     array_for_multi_clause = True
+    inherit_cache = True
 
 
 class percentile_disc(OrderedSetAgg):
@@ -1005,7 +1050,7 @@ class percentile_disc(OrderedSetAgg):
     modifier to supply a sort expression to operate upon.
 
     The return type of this function is the same as the sort expression,
-    or if the arguments are an array, an :class:`.types.ARRAY` of the sort
+    or if the arguments are an array, an :class:`_types.ARRAY` of the sort
     expression's type.
 
     .. versionadded:: 1.1
@@ -1013,6 +1058,7 @@ class percentile_disc(OrderedSetAgg):
     """
 
     array_for_multi_clause = True
+    inherit_cache = True
 
 
 class rank(GenericFunction):
@@ -1028,6 +1074,7 @@ class rank(GenericFunction):
     """
 
     type = sqltypes.Integer()
+    inherit_cache = True
 
 
 class dense_rank(GenericFunction):
@@ -1043,6 +1090,7 @@ class dense_rank(GenericFunction):
     """
 
     type = sqltypes.Integer()
+    inherit_cache = True
 
 
 class percent_rank(GenericFunction):
@@ -1058,6 +1106,7 @@ class percent_rank(GenericFunction):
     """
 
     type = sqltypes.Numeric()
+    inherit_cache = True
 
 
 class cume_dist(GenericFunction):
@@ -1073,13 +1122,14 @@ class cume_dist(GenericFunction):
     """
 
     type = sqltypes.Numeric()
+    inherit_cache = True
 
 
 class cube(GenericFunction):
     r"""Implement the ``CUBE`` grouping operation.
 
     This function is used as part of the GROUP BY of a statement,
-    e.g. :meth:`.Select.group_by`::
+    e.g. :meth:`_expression.Select.group_by`::
 
         stmt = select(
             [func.sum(table.c.value), table.c.col_1, table.c.col_2]
@@ -1089,13 +1139,14 @@ class cube(GenericFunction):
 
     """
     _has_args = True
+    inherit_cache = True
 
 
 class rollup(GenericFunction):
     r"""Implement the ``ROLLUP`` grouping operation.
 
     This function is used as part of the GROUP BY of a statement,
-    e.g. :meth:`.Select.group_by`::
+    e.g. :meth:`_expression.Select.group_by`::
 
         stmt = select(
             [func.sum(table.c.value), table.c.col_1, table.c.col_2]
@@ -1105,13 +1156,14 @@ class rollup(GenericFunction):
 
     """
     _has_args = True
+    inherit_cache = True
 
 
 class grouping_sets(GenericFunction):
     r"""Implement the ``GROUPING SETS`` grouping operation.
 
     This function is used as part of the GROUP BY of a statement,
-    e.g. :meth:`.Select.group_by`::
+    e.g. :meth:`_expression.Select.group_by`::
 
         stmt = select(
             [func.sum(table.c.value), table.c.col_1, table.c.col_2]
@@ -1138,3 +1190,4 @@ class grouping_sets(GenericFunction):
 
     """
     _has_args = True
+    inherit_cache = True

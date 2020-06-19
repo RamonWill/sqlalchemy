@@ -97,13 +97,13 @@ class CompiledSQL(SQLMatchRule):
         else:
             map_ = None
 
-        if isinstance(context.compiled.statement, _DDLCompiles):
+        if isinstance(execute_observed.clauseelement, _DDLCompiles):
 
-            compiled = context.compiled.statement.compile(
+            compiled = execute_observed.clauseelement.compile(
                 dialect=compare_dialect, schema_translate_map=map_
             )
         else:
-            compiled = context.compiled.statement.compile(
+            compiled = execute_observed.clauseelement.compile(
                 dialect=compare_dialect,
                 column_keys=context.compiled.column_keys,
                 inline=context.compiled.inline,
@@ -388,7 +388,9 @@ def assert_engine(engine):
     orig = []
 
     @event.listens_for(engine, "before_execute")
-    def connection_execute(conn, clauseelement, multiparams, params):
+    def connection_execute(
+        conn, clauseelement, multiparams, params, execution_options
+    ):
         # grab the original statement + params before any cursor
         # execution
         orig[:] = clauseelement, multiparams, params

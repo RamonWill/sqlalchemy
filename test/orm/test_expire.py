@@ -82,6 +82,24 @@ class ExpireTest(_fixtures.FixtureTest):
 
         self.assert_sql_count(testing.db, go, 0)
 
+    def test_expire_autoflush(self):
+        User, users = self.classes.User, self.tables.users
+        Address, addresses = self.classes.Address, self.tables.addresses
+
+        mapper(User, users)
+        mapper(Address, addresses, properties={"user": relationship(User)})
+
+        s = Session()
+
+        a1 = s.query(Address).get(2)
+        u1 = s.query(User).get(7)
+        a1.user = u1
+
+        s.expire(a1, ["user_id"])
+
+        # autoflushes
+        eq_(a1.user_id, 7)
+
     def test_persistence_check(self):
         users, User = self.tables.users, self.classes.User
 
@@ -299,13 +317,6 @@ class ExpireTest(_fixtures.FixtureTest):
             s.refresh,
             u,
             ["addresses"],
-        )
-
-        # in contrast to a regular query with no columns
-        assert_raises_message(
-            sa_exc.InvalidRequestError,
-            "no columns with which to SELECT",
-            s.query().all,
         )
 
     def test_refresh_cancels_expire(self):
@@ -1367,15 +1378,17 @@ class PolymorphicExpireTest(fixtures.MappedTest):
             pass
 
     @classmethod
-    def insert_data(cls):
+    def insert_data(cls, connection):
         people, engineers = cls.tables.people, cls.tables.engineers
 
-        people.insert().execute(
+        connection.execute(
+            people.insert(),
             {"person_id": 1, "name": "person1", "type": "person"},
             {"person_id": 2, "name": "engineer1", "type": "engineer"},
             {"person_id": 3, "name": "engineer2", "type": "engineer"},
         )
-        engineers.insert().execute(
+        connection.execute(
+            engineers.insert(),
             {"person_id": 2, "status": "new engineer"},
             {"person_id": 3, "status": "old engineer"},
         )
@@ -1747,6 +1760,24 @@ class RefreshTest(_fixtures.FixtureTest):
             r"is not persistent within this Session",
             lambda: s.refresh(u),
         )
+
+    def test_refresh_autoflush(self):
+        User, users = self.classes.User, self.tables.users
+        Address, addresses = self.classes.Address, self.tables.addresses
+
+        mapper(User, users)
+        mapper(Address, addresses, properties={"user": relationship(User)})
+
+        s = Session()
+
+        a1 = s.query(Address).get(2)
+        u1 = s.query(User).get(7)
+        a1.user = u1
+
+        s.refresh(a1, ["user_id"])
+
+        # autoflushes
+        eq_(a1.user_id, 7)
 
     def test_refresh_expired(self):
         User, users = self.classes.User, self.tables.users

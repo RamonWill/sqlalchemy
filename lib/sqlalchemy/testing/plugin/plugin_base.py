@@ -10,7 +10,7 @@
 this module is designed to work as a testing-framework-agnostic library,
 created so that multiple test frameworks can be supported at once
 (mostly so that we can migrate to new ones). The current target
-is py.test.
+is pytest.
 
 """
 
@@ -117,6 +117,12 @@ def setup_options(make_option):
         help="Type of sort for profiling standard output",
     )
     make_option(
+        "--profile-dump",
+        type="string",
+        dest="profiledump",
+        help="Filename where a single profile run will be dumped",
+    )
+    make_option(
         "--postgresql-templatedb",
         type="string",
         help="name of template database to use for PostgreSQL "
@@ -206,7 +212,7 @@ def memoize_important_follower_config(dict_):
 
     This invokes in the parent process after normal config is set up.
 
-    This is necessary as py.test seems to not be using forking, so we
+    This is necessary as pytest seems to not be using forking, so we
     start with nothing in memory, *but* it isn't running our argparse
     callables, so we have to just copy all of that over.
 
@@ -412,6 +418,17 @@ def _prep_testing_database(options, file_config):
     if options.dropfirst:
         for cfg in config.Config.all_configs():
             e = cfg.db
+
+            # TODO: this has to be part of provision.py in postgresql
+            if against(cfg, "postgresql"):
+                with e.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as conn:
+                    for xid in conn.execute(
+                        "select gid from pg_prepared_xacts"
+                    ).scalars():
+                        conn.execute("ROLLBACK PREPARED '%s'" % xid)
+
             inspector = inspect(e)
             try:
                 view_names = inspector.get_view_names()
@@ -447,6 +464,7 @@ def _prep_testing_database(options, file_config):
             if config.requirements.schemas.enabled_for_config(cfg):
                 util.drop_all_tables(e, inspector, schema=cfg.test_schema)
 
+            # TODO: this has to be part of provision.py in postgresql
             if against(cfg, "postgresql"):
                 from sqlalchemy.dialects import postgresql
 
@@ -458,6 +476,8 @@ def _prep_testing_database(options, file_config):
                             )
                         )
                     )
+
+            # TODO: need to do a get_sequences and drop them also after tables
 
 
 @post
@@ -483,6 +503,7 @@ def _setup_profiling(options, file_config):
     profiling._profile_stats = profiling.ProfileStatsFile(
         file_config.get("sqla_testing", "profile_file"),
         sort=options.profilesort,
+        dump=options.profiledump,
     )
 
 

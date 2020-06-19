@@ -1,62 +1,62 @@
-
 =============
 0.7 Changelog
 =============
 
 .. changelog::
     :version: 0.7.11
+    :released:
 
     .. change::
         :tags: bug, engine
         :tickets: 2851
         :versions: 0.8.3, 0.9.0b1
 
-        The regexp used by the :func:`~sqlalchemy.engine.url.make_url` function now parses
-        ipv6 addresses, e.g. surrounded by brackets.
+      The regexp used by the :func:`~sqlalchemy.engine.url.make_url` function now parses
+      ipv6 addresses, e.g. surrounded by brackets.
 
     .. change::
         :tags: bug, orm
         :tickets: 2807
         :versions: 0.8.3, 0.9.0b1
 
-        Fixed bug where list instrumentation would fail to represent a
-        setslice of ``[0:0]`` correctly, which in particular could occur
-        when using ``insert(0, item)`` with the association proxy.  Due
-        to some quirk in Python collections, the issue was much more likely
-        with Python 3 rather than 2.
+      Fixed bug where list instrumentation would fail to represent a
+      setslice of ``[0:0]`` correctly, which in particular could occur
+      when using ``insert(0, item)`` with the association proxy.  Due
+      to some quirk in Python collections, the issue was much more likely
+      with Python 3 rather than 2.
 
     .. change::
         :tags: bug, sql
         :tickets: 2801
         :versions: 0.8.3, 0.9.0b1
 
-        Fixed regression dating back to 0.7.9 whereby the name of a CTE might
-        not be properly quoted if it was referred to in multiple FROM clauses.
+      Fixed regression dating back to 0.7.9 whereby the name of a CTE might
+      not be properly quoted if it was referred to in multiple FROM clauses.
 
     .. change::
         :tags: mysql, bug
         :tickets: 2791
         :versions: 0.8.3, 0.9.0b1
 
-        Updates to MySQL reserved words for versions 5.5, 5.6, courtesy
-        Hanno Schlichting.
+      Updates to MySQL reserved words for versions 5.5, 5.6, courtesy
+      Hanno Schlichting.
 
     .. change::
         :tags: sql, bug, cte
         :tickets: 2783
         :versions: 0.8.3, 0.9.0b1
 
-        Fixed bug in common table expression system where if the CTE were
-        used only as an ``alias()`` construct, it would not render using the
-        WITH keyword.
+      Fixed bug in common table expression system where if the CTE were
+      used only as an ``alias()`` construct, it would not render using the
+      WITH keyword.
 
     .. change::
         :tags: bug, sql
         :tickets: 2784
         :versions: 0.8.3, 0.9.0b1
 
-        Fixed bug in :class:`.CheckConstraint` DDL where the "quote" flag from a
-        :class:`.Column` object would not be propagated.
+      Fixed bug in :class:`.CheckConstraint` DDL where the "quote" flag from a
+      :class:`_schema.Column` object would not be propagated.
 
     .. change::
         :tags: bug, orm
@@ -133,10 +133,10 @@
         :tickets: 2604
         :versions: 0.8.0b2
 
-      Fixed :meth:`.MetaData.reflect` to correctly use
-      the given :class:`.Connection`, if given, without
+      Fixed :meth:`_schema.MetaData.reflect` to correctly use
+      the given :class:`_engine.Connection`, if given, without
       opening a second connection from that connection's
-      :class:`.Engine`.
+      :class:`_engine.Engine`.
 
     .. change::
         :tags: mssql, bug
@@ -172,8 +172,8 @@
         :tags: sql, bug
         :tickets: 2643
 
-        Fixed bug where :meth:`.Table.tometadata` would fail if a
-        :class:`.Column` had both a foreign key as well as an
+        Fixed bug where :meth:`_schema.Table.tometadata` would fail if a
+        :class:`_schema.Column` had both a foreign key as well as an
         alternate ".key" name for the column.
 
     .. change::
@@ -201,7 +201,7 @@
         :tags: orm, bug
         :tickets: 2640
 
-      :meth:`.Query.merge_result` can now load rows from an outer join
+      :meth:`_query.Query.merge_result` can now load rows from an outer join
       where an entity may be ``None`` without throwing an error.
 
     .. change::
@@ -2578,7 +2578,7 @@
 
       The behavior of =/!= when comparing a scalar select
       to a value will no longer produce IN/NOT IN as of 0.8;
-      this behavior is a little too heavy handed (use in_() if
+      this behavior is a little too heavy handed (use ``in_()`` if
       you want to emit IN) and now emits a deprecation warning.
       To get the 0.8 behavior immediately and remove the warning,
       a compiler recipe is given at

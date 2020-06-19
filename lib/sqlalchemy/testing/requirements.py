@@ -19,6 +19,7 @@ import platform
 import sys
 
 from . import exclusions
+from . import fails_on_everything_except
 from .. import util
 
 
@@ -1168,3 +1169,34 @@ class SuiteRequirements(Requirements):
         """If persistence information is returned by the reflection of
         computed columns"""
         return exclusions.closed()
+
+    @property
+    def supports_distinct_on(self):
+        """If a backend supports the DISTINCT ON in a select"""
+        return exclusions.closed()
+
+    @property
+    def supports_is_distinct_from(self):
+        """Supports some form of "x IS [NOT] DISTINCT FROM y" construct.
+        Different dialects will implement their own flavour, e.g.,
+        sqlite will emit "x IS NOT y" instead of "x IS DISTINCT FROM y".
+
+        .. seealso::
+
+            :meth:`.ColumnOperators.is_distinct_from`
+
+        """
+        return exclusions.skip_if(
+            lambda config: not config.db.dialect.supports_is_distinct_from,
+            "driver doesn't support an IS DISTINCT FROM construct",
+        )
+
+    @property
+    def emulated_lastrowid_even_with_sequences(self):
+        """"target dialect retrieves cursor.lastrowid or an equivalent
+        after an insert() construct executes, even if the table has a
+        Sequence on it..
+        """
+        return fails_on_everything_except(
+            "mysql", "sqlite+pysqlite", "sqlite+pysqlcipher", "sybase",
+        )
