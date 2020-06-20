@@ -216,8 +216,6 @@ class RootRegistry(PathRegistry):
 
     """
 
-    inherit_cache = True
-
     path = natural_path = ()
     has_entity = False
     is_aliased_class = False
@@ -230,31 +228,10 @@ class RootRegistry(PathRegistry):
 PathRegistry.root = RootRegistry()
 
 
-class PathToken(HasCacheKey, str):
-    """cacheable string token"""
-
-    _intern = {}
-
-    def _gen_cache_key(self, anon_map, bindparams):
-        return (str(self),)
-
-    @classmethod
-    def intern(cls, strvalue):
-        if strvalue in cls._intern:
-            return cls._intern[strvalue]
-        else:
-            cls._intern[strvalue] = result = PathToken(strvalue)
-            return result
-
-
 class TokenRegistry(PathRegistry):
     __slots__ = ("token", "parent", "path", "natural_path")
 
-    inherit_cache = True
-
     def __init__(self, parent, token):
-        token = PathToken.intern(token)
-
         self.token = token
         self.parent = parent
         self.path = parent.path + (token,)
@@ -284,7 +261,6 @@ class TokenRegistry(PathRegistry):
 
 class PropRegistry(PathRegistry):
     is_unnatural = False
-    inherit_cache = True
 
     def __init__(self, parent, prop):
         # restate this path in terms of the
@@ -444,7 +420,6 @@ class AbstractEntityRegistry(PathRegistry):
 class SlotsEntityRegistry(AbstractEntityRegistry):
     # for aliased class, return lightweight, no-cycles created
     # version
-    inherit_cache = True
 
     __slots__ = (
         "key",
@@ -459,8 +434,6 @@ class SlotsEntityRegistry(AbstractEntityRegistry):
 class CachingEntityRegistry(AbstractEntityRegistry, dict):
     # for long lived mapper, return dict based caching
     # version that creates reference cycles
-
-    inherit_cache = True
 
     def __getitem__(self, entity):
         if isinstance(entity, (int, slice)):

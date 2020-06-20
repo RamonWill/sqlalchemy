@@ -16,7 +16,6 @@ from ._collections import collections_abc  # noqa
 from ._collections import column_dict  # noqa
 from ._collections import column_set  # noqa
 from ._collections import EMPTY_SET  # noqa
-from ._collections import FacadeDict  # noqa
 from ._collections import flatten_iterator  # noqa
 from ._collections import has_dupes  # noqa
 from ._collections import has_intersection  # noqa
@@ -65,7 +64,6 @@ from .compat import pickle  # noqa
 from .compat import print_  # noqa
 from .compat import py2k  # noqa
 from .compat import py36  # noqa
-from .compat import py37  # noqa
 from .compat import py3k  # noqa
 from .compat import quote_plus  # noqa
 from .compat import raise_  # noqa
@@ -150,4 +148,5 @@ from .langhelpers import warn_limited  # noqa
 from .langhelpers import wrap_callable  # noqa
 
 
-SQLALCHEMY_WARN_20 = False
+# things that used to be not always available,
+# but are now as of current support Python versions

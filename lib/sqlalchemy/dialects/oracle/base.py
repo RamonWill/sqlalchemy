@@ -12,6 +12,21 @@ r"""
     Oracle version 8 through current (11g at the time of this writing) are
     supported.
 
+Connect Arguments
+-----------------
+
+The dialect supports several :func:`~sqlalchemy.create_engine()` arguments
+which affect the behavior of the dialect regardless of driver in use.
+
+* ``use_ansi`` - Use ANSI JOIN constructs (see the section on Oracle 8).
+  Defaults to ``True``.  If ``False``, Oracle-8 compatible constructs are used
+  for joins.
+
+* ``optimize_limits`` - defaults to ``False``. see the section on
+  LIMIT/OFFSET.
+
+* ``use_binds_for_limits`` - deprecated.  see the section on
+  LIMIT/OFFSET.
 
 Auto Increment Behavior
 -----------------------
@@ -46,7 +61,7 @@ of isolation, however the SQLAlchemy Oracle dialect currently only has
 explicit support for "READ COMMITTED".  It is possible to emit a
 "SET TRANSACTION" statement on a connection in order to use SERIALIZABLE
 isolation, however the SQLAlchemy dialect will remain unaware of this setting,
-such as if the :meth:`_engine.Connection.get_isolation_level` method is used;
+such as if the :meth:`.Connection.get_isolation_level` method is used;
 this method is hardcoded to return "READ COMMITTED" right now.
 
 The AUTOCOMMIT isolation level is also supported by the cx_Oracle dialect.
@@ -110,7 +125,7 @@ As of SQLAlchemy 1.4, the default max identifier length for the Oracle dialect
 is 128 characters.  Upon first connect, the compatibility version is detected
 and if it is less than Oracle version 12.2, the max identifier length is
 changed to be 30 characters.  In all cases, setting the
-:paramref:`_sa.create_engine.max_identifier_length` parameter will bypass this
+:paramref:`.create_engine.max_identifier_length` parameter will bypass this
 change and the value given will be used as is::
 
     engine = create_engine(
@@ -168,8 +183,7 @@ database migration that wishes to "DROP CONSTRAINT" on a name that was
 previously generated with the shorter length.  This migration will fail when
 the identifier length is changed without the name of the index or constraint
 first being adjusted.  Such applications are strongly advised to make use of
-:paramref:`_sa.create_engine.max_identifier_length`
-in order to maintain control
+:paramref:`.create_engine.max_identifier_length` in order to maintain control
 of the generation of truncated names, and to fully review and test all database
 migrations in a staging environment when changing this value to ensure that the
 impact of this change has been mitigated.
@@ -192,7 +206,7 @@ There is currently a single option to affect its behavior:
 
 * the "FIRST_ROWS()" optimization keyword is not used by default.  To enable
   the usage of this optimization directive, specify ``optimize_limits=True``
-  to :func:`_sa.create_engine`.
+  to :func:`.create_engine`.
 
 .. versionchanged:: 1.4
     The Oracle dialect renders limit/offset integer values using a "post
@@ -228,7 +242,7 @@ on the Oracle backend.  By default, "implicit returning" typically only
 fetches the value of a single ``nextval(some_seq)`` expression embedded into
 an INSERT in order to increment a sequence within an INSERT statement and get
 the value back at the same time. To disable this feature across the board,
-specify ``implicit_returning=False`` to :func:`_sa.create_engine`::
+specify ``implicit_returning=False`` to :func:`.create_engine`::
 
     engine = create_engine("oracle://scott:tiger@dsn",
                            implicit_returning=False)
@@ -290,7 +304,7 @@ Synonym/DBLINK Reflection
 When using reflection with Table objects, the dialect can optionally search
 for tables indicated by synonyms, either in local or remote schemas or
 accessed over DBLINK, by passing the flag ``oracle_resolve_synonyms=True`` as
-a keyword argument to the :class:`_schema.Table` construct::
+a keyword argument to the :class:`.Table` construct::
 
     some_table = Table('some_table', autoload=True,
                                 autoload_with=some_engine,
@@ -304,8 +318,8 @@ knows how to locate the table's information using DBLINK syntax(e.g.
 ``@dblink``).
 
 ``oracle_resolve_synonyms`` is accepted wherever reflection arguments are
-accepted, including methods such as :meth:`_schema.MetaData.reflect` and
-:meth:`_reflection.Inspector.get_columns`.
+accepted, including methods such as :meth:`.MetaData.reflect` and
+:meth:`.Inspector.get_columns`.
 
 If synonyms are not in use, this flag should be left disabled.
 
@@ -318,22 +332,18 @@ The Oracle dialect can return information about foreign key, unique, and
 CHECK constraints, as well as indexes on tables.
 
 Raw information regarding these constraints can be acquired using
-:meth:`_reflection.Inspector.get_foreign_keys`,
-:meth:`_reflection.Inspector.get_unique_constraints`,
-:meth:`_reflection.Inspector.get_check_constraints`, and
-:meth:`_reflection.Inspector.get_indexes`.
+:meth:`.Inspector.get_foreign_keys`, :meth:`.Inspector.get_unique_constraints`,
+:meth:`.Inspector.get_check_constraints`, and :meth:`.Inspector.get_indexes`.
 
 .. versionchanged:: 1.2  The Oracle dialect can now reflect UNIQUE and
    CHECK constraints.
 
-When using reflection at the :class:`_schema.Table` level, the
-:class:`_schema.Table`
+When using reflection at the :class:`.Table` level, the :class:`.Table`
 will also include these constraints.
 
 Note the following caveats:
 
-* When using the :meth:`_reflection.Inspector.get_check_constraints` method,
-  Oracle
+* When using the :meth:`.Inspector.get_check_constraints` method, Oracle
   builds a special "IS NOT NULL" constraint for columns that specify
   "NOT NULL".  This constraint is **not** returned by default; to include
   the "IS NOT NULL" constraints, pass the flag ``include_all=True``::
@@ -345,13 +355,11 @@ Note the following caveats:
       all_check_constraints = inspector.get_check_constraints(
           "some_table", include_all=True)
 
-* in most cases, when reflecting a :class:`_schema.Table`,
-  a UNIQUE constraint will
+* in most cases, when reflecting a :class:`.Table`, a UNIQUE constraint will
   **not** be available as a :class:`.UniqueConstraint` object, as Oracle
   mirrors unique constraints with a UNIQUE index in most cases (the exception
   seems to be when two or more unique constraints represent the same columns);
-  the :class:`_schema.Table` will instead represent these using
-  :class:`.Index`
+  the :class:`.Table` will instead represent these using :class:`.Index`
   with the ``unique=True`` flag set.
 
 * Oracle creates an implicit index for the primary key of a table; this index
@@ -363,12 +371,11 @@ Note the following caveats:
 Table names with SYSTEM/SYSAUX tablespaces
 -------------------------------------------
 
-The :meth:`_reflection.Inspector.get_table_names` and
-:meth:`_reflection.Inspector.get_temp_table_names`
+The :meth:`.Inspector.get_table_names` and
+:meth:`.Inspector.get_temp_table_names`
 methods each return a list of table names for the current engine. These methods
 are also part of the reflection which occurs within an operation such as
-:meth:`_schema.MetaData.reflect`.  By default,
-these operations exclude the ``SYSTEM``
+:meth:`.MetaData.reflect`.  By default, these operations exclude the ``SYSTEM``
 and ``SYSAUX`` tablespaces from the operation.   In order to change this, the
 default list of tablespaces excluded can be changed at the engine level using
 the ``exclude_tablespaces`` parameter::
@@ -385,15 +392,15 @@ DateTime Compatibility
 
 Oracle has no datatype known as ``DATETIME``, it instead has only ``DATE``,
 which can actually store a date and time value.  For this reason, the Oracle
-dialect provides a type :class:`_oracle.DATE` which is a subclass of
+dialect provides a type :class:`.oracle.DATE` which is a subclass of
 :class:`.DateTime`.   This type has no special behavior, and is only
 present as a "marker" for this type; additionally, when a database column
 is reflected and the type is reported as ``DATE``, the time-supporting
-:class:`_oracle.DATE` type is used.
+:class:`.oracle.DATE` type is used.
 
-.. versionchanged:: 0.9.4 Added :class:`_oracle.DATE` to subclass
+.. versionchanged:: 0.9.4 Added :class:`.oracle.DATE` to subclass
    :class:`.DateTime`.  This is a change as previous versions
-   would reflect a ``DATE`` column as :class:`_types.DATE`, which subclasses
+   would reflect a ``DATE`` column as :class:`.types.DATE`, which subclasses
    :class:`.Date`.   The only significance here is for schemes that are
    examining the type of column for use in special Python translations or
    for migrating schemas to other database backends.
@@ -404,7 +411,7 @@ Oracle Table Options
 -------------------------
 
 The CREATE TABLE phrase supports the following options with Oracle
-in conjunction with the :class:`_schema.Table` construct:
+in conjunction with the :class:`.Table` construct:
 
 
 * ``ON COMMIT``::
@@ -577,7 +584,7 @@ class DATE(sqltypes.DateTime):
     """Provide the oracle DATE type.
 
     This type has no special Python behavior, except that it subclasses
-    :class:`_types.DateTime`; this is to suit the fact that the Oracle
+    :class:`.types.DateTime`; this is to suit the fact that the Oracle
     ``DATE`` type supports a time value.
 
     .. versionadded:: 0.9.4
@@ -975,8 +982,16 @@ class OracleCompiler(compiler.SQLCompiler):
 
         return "RETURNING " + ", ".join(columns) + " INTO " + ", ".join(binds)
 
-    def translate_select_structure(self, select_stmt, **kwargs):
-        select = select_stmt
+    def _TODO_visit_compound_select(self, select):
+        """Need to determine how to get ``LIMIT``/``OFFSET`` into a
+        ``UNION`` for Oracle.
+        """
+        pass
+
+    def visit_select(self, select, **kwargs):
+        """Look for ``LIMIT`` and OFFSET in a select statement, and if
+        so tries to wrap it in a subquery with ``rownum`` criterion.
+        """
 
         if not getattr(select, "_oracle_visit", None):
             if not self.dialect.use_ansi:
@@ -995,7 +1010,7 @@ class OracleCompiler(compiler.SQLCompiler):
                 # https://blogs.oracle.com/oraclemagazine/\
                 # on-rownum-and-limiting-results
 
-                orig_select = select
+                kwargs["select_wraps_for"] = orig_select = select
                 select = select._generate()
                 select._oracle_visit = True
 
@@ -1128,7 +1143,7 @@ class OracleCompiler(compiler.SQLCompiler):
                     offsetselect._for_update_arg = for_update
                     select = offsetselect
 
-        return select
+        return compiler.SQLCompiler.visit_select(self, select, **kwargs)
 
     def limit_clause(self, select, **kw):
         return ""
@@ -1153,18 +1168,6 @@ class OracleCompiler(compiler.SQLCompiler):
             tmp += " SKIP LOCKED"
 
         return tmp
-
-    def visit_is_distinct_from_binary(self, binary, operator, **kw):
-        return "DECODE(%s, %s, 0, 1) = 1" % (
-            self.process(binary.left),
-            self.process(binary.right),
-        )
-
-    def visit_isnot_distinct_from_binary(self, binary, operator, **kw):
-        return "DECODE(%s, %s, 0, 1) = 0" % (
-            self.process(binary.left),
-            self.process(binary.right),
-        )
 
 
 class OracleDDLCompiler(compiler.DDLCompiler):
@@ -1444,10 +1447,8 @@ class OracleDialect(default.DefaultDialect):
                 "SELECT table_name FROM all_tables "
                 "WHERE table_name = :name AND owner = :schema_name"
             ),
-            dict(
-                name=self.denormalize_name(table_name),
-                schema_name=self.denormalize_name(schema),
-            ),
+            name=self.denormalize_name(table_name),
+            schema_name=self.denormalize_name(schema),
         )
         return cursor.first() is not None
 
@@ -1460,10 +1461,8 @@ class OracleDialect(default.DefaultDialect):
                 "WHERE sequence_name = :name AND "
                 "sequence_owner = :schema_name"
             ),
-            dict(
-                name=self.denormalize_name(sequence_name),
-                schema_name=self.denormalize_name(schema),
-            ),
+            name=self.denormalize_name(sequence_name),
+            schema_name=self.denormalize_name(schema),
         )
         return cursor.first() is not None
 
@@ -1506,7 +1505,7 @@ class OracleDialect(default.DefaultDialect):
         q += " AND ".join(clauses)
 
         result = connection.execution_options(future_result=True).execute(
-            sql.text(q), params
+            sql.text(q), **params
         )
         if desired_owner:
             row = result.mappings().first()
@@ -1602,7 +1601,7 @@ class OracleDialect(default.DefaultDialect):
             "OWNER = :owner " "AND IOT_NAME IS NULL " "AND DURATION IS NULL"
         )
 
-        cursor = connection.execute(sql.text(sql_str), dict(owner=schema))
+        cursor = connection.execute(sql.text(sql_str), owner=schema)
         return [self.normalize_name(row[0]) for row in cursor]
 
     @reflection.cache
@@ -1622,16 +1621,14 @@ class OracleDialect(default.DefaultDialect):
             "AND DURATION IS NOT NULL"
         )
 
-        cursor = connection.execute(sql.text(sql_str), dict(owner=schema))
+        cursor = connection.execute(sql.text(sql_str), owner=schema)
         return [self.normalize_name(row[0]) for row in cursor]
 
     @reflection.cache
     def get_view_names(self, connection, schema=None, **kw):
         schema = self.denormalize_name(schema or self.default_schema_name)
         s = sql.text("SELECT view_name FROM all_views WHERE owner = :owner")
-        cursor = connection.execute(
-            s, dict(owner=self.denormalize_name(schema))
-        )
+        cursor = connection.execute(s, owner=self.denormalize_name(schema))
         return [self.normalize_name(row[0]) for row in cursor]
 
     @reflection.cache
@@ -1670,7 +1667,7 @@ class OracleDialect(default.DefaultDialect):
             text += " AND owner = :owner "
         text = text % {"dblink": dblink, "columns": ", ".join(columns)}
 
-        result = connection.execute(sql.text(text), params)
+        result = connection.execute(sql.text(text), **params)
 
         enabled = dict(DISABLED=False, ENABLED=True)
 
@@ -1735,7 +1732,7 @@ class OracleDialect(default.DefaultDialect):
         text += " ORDER BY col.column_id"
         text = text % {"dblink": dblink, "char_length_col": char_length_col}
 
-        c = connection.execute(sql.text(text), params)
+        c = connection.execute(sql.text(text), **params)
 
         for row in c:
             colname = self.normalize_name(row[0])
@@ -1825,8 +1822,7 @@ class OracleDialect(default.DefaultDialect):
         """
 
         c = connection.execute(
-            sql.text(COMMENT_SQL),
-            dict(table_name=table_name, schema_name=schema),
+            sql.text(COMMENT_SQL), table_name=table_name, schema_name=schema
         )
         return {"text": c.scalar()}
 
@@ -1874,7 +1870,7 @@ class OracleDialect(default.DefaultDialect):
         text = text % {"dblink": dblink}
 
         q = sql.text(text)
-        rp = connection.execute(q, params)
+        rp = connection.execute(q, **params)
         indexes = []
         last_index_name = None
         pk_constraint = self.get_pk_constraint(
@@ -1971,7 +1967,7 @@ class OracleDialect(default.DefaultDialect):
         )
 
         text = text % {"dblink": dblink}
-        rp = connection.execute(sql.text(text), params)
+        rp = connection.execute(sql.text(text), **params)
         constraint_data = rp.fetchall()
         return constraint_data
 
@@ -2199,7 +2195,7 @@ class OracleDialect(default.DefaultDialect):
             text += " AND owner = :schema"
             params["schema"] = schema
 
-        rp = connection.execute(sql.text(text), params).scalar()
+        rp = connection.execute(sql.text(text), **params).scalar()
         if rp:
             if util.py2k:
                 rp = rp.decode(self.encoding)

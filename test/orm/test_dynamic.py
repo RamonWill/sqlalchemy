@@ -2,7 +2,6 @@ from sqlalchemy import cast
 from sqlalchemy import desc
 from sqlalchemy import exc
 from sqlalchemy import func
-from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import select
 from sqlalchemy import testing
@@ -84,16 +83,6 @@ class DynamicTest(_DynamicFixture, _fixtures.FixtureTest, AssertsCompiledSQL):
             q.filter(User.id == 7).all(),
         )
         eq_(self.static.user_address_result, q.all())
-
-        eq_(
-            [
-                User(
-                    id=7,
-                    addresses=[Address(id=1, email_address="jack@bean.com")],
-                )
-            ],
-            q.filter_by(id=7).all(),
-        )
 
     def test_statement(self):
         """test that the .statement accessor returns the actual statement that
@@ -980,25 +969,17 @@ class HistoryTest(_DynamicFixture, _fixtures.FixtureTest):
         elif isinstance(obj, self.classes.Order):
             attrname = "items"
 
-        sess = inspect(obj).session
+        eq_(attributes.get_history(obj, attrname), compare)
 
-        if sess:
-            sess.autoflush = False
-        try:
-            eq_(attributes.get_history(obj, attrname), compare)
+        if compare_passive is None:
+            compare_passive = compare
 
-            if compare_passive is None:
-                compare_passive = compare
-
-            eq_(
-                attributes.get_history(
-                    obj, attrname, attributes.LOAD_AGAINST_COMMITTED
-                ),
-                compare_passive,
-            )
-        finally:
-            if sess:
-                sess.autoflush = True
+        eq_(
+            attributes.get_history(
+                obj, attrname, attributes.LOAD_AGAINST_COMMITTED
+            ),
+            compare_passive,
+        )
 
     def test_append_transient(self):
         u1, a1 = self._transient_fixture()

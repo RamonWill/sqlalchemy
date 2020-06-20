@@ -139,11 +139,11 @@ class NullVersionIdTest(fixtures.MappedTest):
         # you should get a FlushError on update.
 
         f1.value = "f1rev2"
+        f1.version_id = None
 
         with conditional_sane_rowcount_warnings(
             update=True, only_returning=True
         ):
-            f1.version_id = None
             assert_raises_message(
                 sa.orm.exc.FlushError,
                 "Instance does not contain a non-NULL version value",
@@ -451,7 +451,7 @@ class VersioningTest(fixtures.MappedTest):
 
         with patch.object(
             config.db.dialect, "supports_sane_multi_rowcount", False
-        ), patch("sqlalchemy.engine.cursor.CursorResult.rowcount", rowcount):
+        ), patch("sqlalchemy.engine.result.ResultProxy.rowcount", rowcount):
 
             Foo = self.classes.Foo
             s1 = self._fixture()
@@ -740,7 +740,7 @@ class VersionOnPostUpdateTest(fixtures.MappedTest):
         # outwit the database transaction isolation and SQLA's
         # expiration at the same time by using different Session on
         # same transaction
-        s2 = Session(bind=s.connection(mapper=Node))
+        s2 = Session(bind=s.connection(Node))
         s2.query(Node).filter(Node.id == n2.id).update({"version_id": 3})
         s2.commit()
 
@@ -762,7 +762,7 @@ class VersionOnPostUpdateTest(fixtures.MappedTest):
         ), patch.object(
             config.db.dialect, "supports_sane_multi_rowcount", False
         ):
-            s2 = Session(bind=s.connection(mapper=Node))
+            s2 = Session(bind=s.connection(Node))
             s2.query(Node).filter(Node.id == n2.id).update({"version_id": 3})
             s2.commit()
 
@@ -783,7 +783,7 @@ class VersionOnPostUpdateTest(fixtures.MappedTest):
         # outwit the database transaction isolation and SQLA's
         # expiration at the same time by using different Session on
         # same transaction
-        s2 = Session(bind=s.connection(mapper=Node))
+        s2 = Session(bind=s.connection(Node))
         s2.query(Node).filter(Node.id == n1.id).update({"version_id": 3})
         s2.commit()
 
@@ -1973,9 +1973,10 @@ class VersioningMappedSelectTest(fixtures.MappedTest):
 
         s1.expire_all()
 
+        f1.value = "f2"
+        f1.version_id = 2
+
         with conditional_sane_rowcount_warnings(
             update=True, only_returning=True
         ):
-            f1.value = "f2"
-            f1.version_id = 2
             s1.flush()

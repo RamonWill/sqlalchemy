@@ -16,6 +16,7 @@ documentation for an overview of how this module is used.
 from . import exc  # noqa
 from . import mapper as mapperlib  # noqa
 from . import strategy_options
+from .descriptor_props import ComparableProperty  # noqa
 from .descriptor_props import CompositeProperty  # noqa
 from .descriptor_props import SynonymProperty  # noqa
 from .interfaces import EXT_CONTINUE  # noqa
@@ -30,7 +31,7 @@ from .mapper import reconstructor  # noqa
 from .mapper import validates  # noqa
 from .properties import ColumnProperty  # noqa
 from .query import AliasOption  # noqa
-from .query import FromStatement  # noqa
+from .query import Bundle  # noqa
 from .query import Query  # noqa
 from .relationships import foreign  # noqa
 from .relationships import RelationshipProperty  # noqa
@@ -40,13 +41,10 @@ from .session import close_all_sessions  # noqa
 from .session import make_transient  # noqa
 from .session import make_transient_to_detached  # noqa
 from .session import object_session  # noqa
-from .session import ORMExecuteState  # noqa
 from .session import Session  # noqa
 from .session import sessionmaker  # noqa
-from .session import SessionTransaction  # noqa
 from .strategy_options import Load  # noqa
 from .util import aliased  # noqa
-from .util import Bundle  # noqa
 from .util import join  # noqa
 from .util import object_mapper  # noqa
 from .util import outerjoin  # noqa
@@ -101,9 +99,7 @@ relationship = public_factory(RelationshipProperty, ".orm.relationship")
 
 @_sa_util.deprecated_20("relation", "Please use :func:`.relationship`.")
 def relation(*arg, **kw):
-    """A synonym for :func:`relationship`.
-
-    """
+    """A synonym for :func:`relationship`."""
 
     return relationship(*arg, **kw)
 
@@ -156,8 +152,7 @@ def deferred(*columns, **kw):
     not load unless accessed.
 
     :param \*columns: columns to be mapped.  This is typically a single
-     :class:`_schema.Column` object,
-     however a collection is supported in order
+     :class:`.Column` object, however a collection is supported in order
      to support multiple columns mapped under the same attribute.
 
     :param raiseload: boolean, if True, indicates an exception should be raised
@@ -180,21 +175,8 @@ def deferred(*columns, **kw):
     return ColumnProperty(deferred=True, *columns, **kw)
 
 
-def query_expression(default_expr=_sql.null()):
+def query_expression():
     """Indicate an attribute that populates from a query-time SQL expression.
-
-    :param default_expr: Optional SQL expression object that will be used in
-        all cases if not assigned later with :func:`_orm.with_expression`.
-        E.g.::
-
-            from sqlalchemy.sql import literal
-
-            class C(Base):
-                #...
-                my_expr = query_expression(literal(1))
-
-        .. versionadded:: 1.3.18
-
 
     .. versionadded:: 1.2
 
@@ -203,7 +185,7 @@ def query_expression(default_expr=_sql.null()):
         :ref:`mapper_querytime_expression`
 
     """
-    prop = ColumnProperty(default_expr)
+    prop = ColumnProperty(_sql.null())
     prop.strategy_key = (("query_expression", True),)
     return prop
 
@@ -211,6 +193,23 @@ def query_expression(default_expr=_sql.null()):
 mapper = public_factory(Mapper, ".orm.mapper")
 
 synonym = public_factory(SynonymProperty, ".orm.synonym")
+
+comparable_property = public_factory(
+    ComparableProperty, ".orm.comparable_property"
+)
+
+
+@_sa_util.deprecated(
+    "0.7",
+    message=":func:`.compile_mappers` is deprecated and will be removed "
+    "in a future release.  Please use :func:`.configure_mappers`",
+)
+def compile_mappers():
+    """Initialize the inter-mapper relationships of all mappers that have
+    been defined.
+
+    """
+    configure_mappers()
 
 
 def clear_mappers():
@@ -256,7 +255,7 @@ defaultload = strategy_options.defaultload._unbound_fn
 selectin_polymorphic = strategy_options.selectin_polymorphic._unbound_fn
 
 
-@_sa_util.deprecated_20("eagerload", "Please use :func:`_orm.joinedload`.")
+@_sa_util.deprecated_20("relation", "Please use :func:`joinedload`.")
 def eagerload(*args, **kwargs):
     """A synonym for :func:`joinedload()`."""
     return joinedload(*args, **kwargs)

@@ -71,12 +71,9 @@ class InheritingSelectablesTest(fixtures.MappedTest):
 
         s = Session()
 
-        #        assert [Baz(), Baz(), Bar(), Bar()] == s.query(Foo).order_by(
-        #            Foo.b.desc()
-        #       ).all()
-
-        #      import pdb
-        #      pdb.set_trace()
+        assert [Baz(), Baz(), Bar(), Bar()] == s.query(Foo).order_by(
+            Foo.b.desc()
+        ).all()
         assert [Bar(), Bar()] == s.query(Bar).all()
 
 

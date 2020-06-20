@@ -1,3 +1,5 @@
+from __future__ import with_statement
+
 from sqlalchemy import Column
 from sqlalchemy import event
 from sqlalchemy import exc as sa_exc
@@ -7,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
-from sqlalchemy.future import Engine
 from sqlalchemy.orm import attributes
 from sqlalchemy.orm import create_session
 from sqlalchemy.orm import exc as orm_exc
@@ -61,7 +62,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
             c.close()
 
     @engines.close_open_connections
-    def test_subtransaction_on_external_subtrans(self):
+    def test_subtransaction_on_external(self):
         users, User = self.tables.users, self.classes.User
 
         mapper(User, users)
@@ -69,22 +70,6 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         trans = conn.begin()
         sess = create_session(bind=conn, autocommit=False, autoflush=True)
         sess.begin(subtransactions=True)
-        u = User(name="ed")
-        sess.add(u)
-        sess.flush()
-        sess.commit()  # commit does nothing
-        trans.rollback()  # rolls back
-        assert len(sess.query(User).all()) == 0
-        sess.close()
-
-    @engines.close_open_connections
-    def test_subtransaction_on_external_no_begin(self):
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-        conn = testing.db.connect()
-        trans = conn.begin()
-        sess = create_session(bind=conn, autocommit=False, autoflush=True)
         u = User(name="ed")
         sess.add(u)
         sess.flush()
@@ -118,71 +103,6 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         except Exception:
             conn.close()
             raise
-
-    @engines.close_open_connections
-    def test_subtransaction_on_external_commit_future(self):
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        engine = Engine._future_facade(testing.db)
-
-        conn = engine.connect()
-        conn.begin()
-
-        sess = create_session(bind=conn, autocommit=False, autoflush=True)
-        u = User(name="ed")
-        sess.add(u)
-        sess.flush()
-        sess.commit()  # commit does nothing
-        conn.rollback()  # rolls back
-        assert len(sess.query(User).all()) == 0
-        sess.close()
-
-    @engines.close_open_connections
-    def test_subtransaction_on_external_rollback_future(self):
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        engine = Engine._future_facade(testing.db)
-
-        conn = engine.connect()
-        conn.begin()
-
-        sess = create_session(bind=conn, autocommit=False, autoflush=True)
-        u = User(name="ed")
-        sess.add(u)
-        sess.flush()
-        sess.rollback()  # rolls back
-        conn.commit()  # nothing to commit
-        assert len(sess.query(User).all()) == 0
-        sess.close()
-
-    @testing.requires.savepoints
-    @engines.close_open_connections
-    def test_savepoint_on_external_future(self):
-        users, User = self.tables.users, self.classes.User
-
-        mapper(User, users)
-
-        engine = Engine._future_facade(testing.db)
-
-        with engine.connect() as conn:
-            conn.begin()
-            sess = create_session(bind=conn, autocommit=False, autoflush=True)
-            u1 = User(name="u1")
-            sess.add(u1)
-            sess.flush()
-
-            sess.begin_nested()
-            u2 = User(name="u2")
-            sess.add(u2)
-            sess.flush()
-            sess.rollback()
-
-            conn.commit()
-            assert len(sess.query(User).all()) == 1
 
     @testing.requires.savepoints
     def test_nested_accounting_new_items_removed(self):
@@ -227,40 +147,6 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         users = self.tables.users
 
         session = create_session(bind=testing.db)
-        session.begin()
-        session.connection().execute(users.insert().values(name="user1"))
-        session.begin(subtransactions=True)
-        session.begin_nested()
-        session.connection().execute(users.insert().values(name="user2"))
-        assert (
-            session.connection()
-            .exec_driver_sql("select count(1) from users")
-            .scalar()
-            == 2
-        )
-        session.rollback()
-        assert (
-            session.connection()
-            .exec_driver_sql("select count(1) from users")
-            .scalar()
-            == 1
-        )
-        session.connection().execute(users.insert().values(name="user3"))
-        session.commit()
-        assert (
-            session.connection()
-            .exec_driver_sql("select count(1) from users")
-            .scalar()
-            == 2
-        )
-
-    @testing.requires.savepoints
-    def test_heavy_nesting_future(self):
-        users = self.tables.users
-
-        engine = Engine._future_facade(testing.db)
-        session = create_session(engine)
-
         session.begin()
         session.connection().execute(users.insert().values(name="user1"))
         session.begin(subtransactions=True)
@@ -366,26 +252,14 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         u = User(name="u1")
         sess.add(u)
         sess.flush()
-        c1 = sess.connection(bind_arguments={"mapper": User})
-        dbapi_conn = c1.connection
-        assert dbapi_conn.is_valid
+        c1 = sess.connection(User)
 
         sess.invalidate()
-
-        # Connection object is closed
-        assert c1.closed
-
-        # "invalidated" is not part of "closed" state
-        assert not c1.invalidated
-
-        # but the DBAPI conn (really ConnectionFairy)
-        # is invalidated
-        assert not dbapi_conn.is_valid
+        assert c1.invalidated
 
         eq_(sess.query(User).all(), [])
-        c2 = sess.connection(bind_arguments={"mapper": User})
+        c2 = sess.connection(User)
         assert not c2.invalidated
-        assert c2.connection.is_valid
 
     def test_subtransaction_on_noautocommit(self):
         User, users = self.classes.User, self.tables.users
@@ -607,7 +481,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         x = [1]
 
         @event.listens_for(sess, "after_commit")  # noqa
-        def add_another_user(session):  # noqa
+        def add_another_user(session):
             x[0] += 1
 
         sess.add(to_flush.pop())
@@ -696,7 +570,6 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
             sess.rollback,
         )
 
-    @testing.requires.independent_connections
     @testing.emits_warning(".*previous exception")
     def test_failed_rollback_deactivates_transaction(self):
         # test #4050
@@ -759,7 +632,6 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         # outermost is active
         eq_(session.transaction._state, _session.ACTIVE)
 
-    @testing.requires.independent_connections
     @testing.emits_warning(".*previous exception")
     def test_failed_rollback_deactivates_transaction_ctx_integration(self):
         # test #4050 in the same context as that of oslo.db
@@ -871,7 +743,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         except Exception:
             trans2.rollback(_capture_exception=True)
         assert_raises_message(
-            sa_exc.PendingRollbackError,
+            sa_exc.InvalidRequestError,
             r"This Session's transaction has been rolled back due to a "
             r"previous exception during flush. To begin a new transaction "
             r"with this Session, first issue Session.rollback\(\). "
@@ -895,24 +767,17 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         return sess, u1
 
     def test_execution_options_begin_transaction(self):
-        bind = mock.Mock(
-            connect=mock.Mock(
-                return_value=mock.Mock(
-                    _is_future=False,
-                    execution_options=mock.Mock(
-                        return_value=mock.Mock(_is_future=False)
-                    ),
-                )
-            )
-        )
+        bind = mock.Mock()
         sess = Session(bind=bind)
         c1 = sess.connection(execution_options={"isolation_level": "FOO"})
-        eq_(bind.mock_calls, [mock.call.connect()])
         eq_(
-            bind.connect().mock_calls,
-            [mock.call.execution_options(isolation_level="FOO")],
+            bind.mock_calls,
+            [
+                mock.call.connect(),
+                mock.call.connect().execution_options(isolation_level="FOO"),
+                mock.call.connect().execution_options().begin(),
+            ],
         )
-        eq_(bind.connect().execution_options().mock_calls, [mock.call.begin()])
         eq_(c1, bind.connect().execution_options())
 
     def test_execution_options_ignored_mid_transaction(self):
@@ -1013,7 +878,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
 
         for i in range(5):
             assert_raises_message(
-                sa_exc.PendingRollbackError,
+                sa_exc.InvalidRequestError,
                 "^This Session's transaction has been "
                 r"rolled back due to a previous exception "
                 "during flush. To "
@@ -1049,7 +914,9 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
 
         with expect_warnings(".*during handling of a previous exception.*"):
             session.begin_nested()
-            savepoint = session.connection()._nested_transaction._savepoint
+            savepoint = (
+                session.connection()._Connection__transaction._savepoint
+            )
 
             # force the savepoint to disappear
             session.connection().dialect.do_release_savepoint(
@@ -1720,12 +1587,7 @@ class SavepointTest(_LocalFixture):
         nested_trans._do_commit()
 
         is_(s.transaction, trans)
-
-        with expect_warnings("nested transaction already deassociated"):
-            # this previously would raise
-            # "savepoint "sa_savepoint_1" does not exist", however as of
-            # #5327 the savepoint already knows it's inactive
-            s.rollback()
+        assert_raises(sa_exc.DBAPIError, s.rollback)
 
         assert u1 not in s.new
 

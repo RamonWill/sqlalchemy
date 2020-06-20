@@ -12,10 +12,8 @@ from sqlalchemy.testing import fixtures
 
 
 class DocTest(fixtures.TestBase):
-    __requires__ = ("python3",)
-
     def _setup_logger(self):
-        rootlogger = logging.getLogger("sqlalchemy.engine.Engine")
+        rootlogger = logging.getLogger("sqlalchemy.engine.base.Engine")
 
         class MyStream(object):
             def write(self, string):
@@ -30,7 +28,7 @@ class DocTest(fixtures.TestBase):
         rootlogger.addHandler(handler)
 
     def _teardown_logger(self):
-        rootlogger = logging.getLogger("sqlalchemy.engine.Engine")
+        rootlogger = logging.getLogger("sqlalchemy.engine.base.Engine")
         rootlogger.removeHandler(self._handler)
 
     def _setup_create_table_patcher(self):
@@ -94,7 +92,7 @@ class DocTest(fixtures.TestBase):
         self._run_doctest("core/tutorial.rst")
 
 
-# unicode checker courtesy pytest
+# unicode checker courtesy py.test
 
 
 def _get_unicode_checker():
@@ -154,6 +152,3 @@ def _get_allow_unicode_flag():
     import doctest
 
     return doctest.register_optionflag("ALLOW_UNICODE")
-
-
-# increase number to force pipeline run. 1

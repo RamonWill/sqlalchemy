@@ -256,7 +256,7 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
         m = mapper(User, users)
         session = create_session()
-        session.connection(mapper=m)
+        session.connection(m)
 
     def test_incomplete_columns(self):
         """Loading from a select which does not contain all columns"""
@@ -277,7 +277,7 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         eq_(a.user_id, 7)
         eq_(a.id, 1)
         # email address auto-defers
-        assert "email_address" not in a.__dict__
+        assert "email_addres" not in a.__dict__
         eq_(a.email_address, "jack@bean.com")
 
     def test_column_not_present(self):
@@ -2568,9 +2568,8 @@ class DeepOptionsTest(_fixtures.FixtureTest):
             "root entities in this query, e.g. mapped class User->users. "
             "Please specify the full path from one of the root entities "
             "to the target attribute.",
-            sess.query(User)
-            .options(sa.orm.joinedload(Order.items))
-            ._compile_context,
+            sess.query(User).options,
+            sa.orm.joinedload(Order.items),
         )
 
         # joinedload "keywords" on items.  it will lazy load "orders", then
@@ -2846,7 +2845,7 @@ class SecondaryOptionsTest(fixtures.MappedTest):
         mapper(Related, related)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         child1, child2, base, related = (
             cls.tables.child1,
             cls.tables.child2,
@@ -2854,8 +2853,7 @@ class SecondaryOptionsTest(fixtures.MappedTest):
             cls.tables.related,
         )
 
-        connection.execute(
-            base.insert(),
+        base.insert().execute(
             [
                 {"id": 1, "type": "child1"},
                 {"id": 2, "type": "child1"},
@@ -2863,20 +2861,18 @@ class SecondaryOptionsTest(fixtures.MappedTest):
                 {"id": 4, "type": "child2"},
                 {"id": 5, "type": "child2"},
                 {"id": 6, "type": "child2"},
-            ],
+            ]
         )
-        connection.execute(child2.insert(), [{"id": 4}, {"id": 5}, {"id": 6}])
-        connection.execute(
-            child1.insert(),
+        child2.insert().execute([{"id": 4}, {"id": 5}, {"id": 6}])
+        child1.insert().execute(
             [
                 {"id": 1, "child2id": 4},
                 {"id": 2, "child2id": 5},
                 {"id": 3, "child2id": 6},
-            ],
+            ]
         )
-        connection.execute(
-            related.insert(),
-            [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}, {"id": 6}],
+        related.insert().execute(
+            [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}, {"id": 6}]
         )
 
     def test_contains_eager(self):
@@ -3037,13 +3033,13 @@ class DeferredPopulationTest(fixtures.MappedTest):
         mapper(Thing, thing, properties={"name": deferred(thing.c.name)})
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         thing, human = cls.tables.thing, cls.tables.human
 
-        connection.execute(thing.insert(), [{"id": 1, "name": "Chair"}])
+        thing.insert().execute([{"id": 1, "name": "Chair"}])
 
-        connection.execute(
-            human.insert(), [{"id": 1, "thing_id": 1, "name": "Clark Kent"}]
+        human.insert().execute(
+            [{"id": 1, "thing_id": 1, "name": "Clark Kent"}]
         )
 
     def _test(self, thing):

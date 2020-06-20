@@ -131,50 +131,6 @@ class O2MTest(fixtures.MappedTest):
         eq_(result[1].parent_foo.data, "foo #1")
 
 
-class ColExpressionsTest(fixtures.DeclarativeMappedTest):
-    __backend__ = True
-
-    @classmethod
-    def setup_classes(cls):
-        Base = cls.DeclarativeBasic
-
-        class A(Base):
-            __tablename__ = "a"
-            id = Column(
-                Integer, primary_key=True, test_needs_autoincrement=True
-            )
-            type = Column(String(10))
-            __mapper_args__ = {
-                "polymorphic_on": type,
-                "polymorphic_identity": "a",
-            }
-
-        class B(A):
-            __tablename__ = "b"
-            id = Column(ForeignKey("a.id"), primary_key=True)
-            data = Column(Integer)
-            __mapper_args__ = {"polymorphic_identity": "b"}
-
-    @classmethod
-    def insert_data(cls, connection):
-        A, B = cls.classes("A", "B")
-        s = Session(connection)
-
-        s.add_all([B(data=5), B(data=7)])
-        s.commit()
-
-    def test_group_by(self):
-        B = self.classes.B
-        s = Session()
-
-        rows = (
-            s.query(B.id.expressions[0], B.id.expressions[1], func.sum(B.data))
-            .group_by(*B.id.expressions)
-            .all()
-        )
-        eq_(rows, [(1, 1, 5), (2, 2, 7)])
-
-
 class PolyExpressionEagerLoad(fixtures.DeclarativeMappedTest):
     run_setup_mappers = "once"
     __dialect__ = "default"
@@ -204,10 +160,10 @@ class PolyExpressionEagerLoad(fixtures.DeclarativeMappedTest):
             __mapper_args__ = {"polymorphic_identity": "b"}
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A = cls.classes.A
 
-        session = Session(connection)
+        session = Session(testing.db)
         session.add_all(
             [
                 A(id=1, discriminator="a"),
@@ -1357,7 +1313,6 @@ class EagerTargetingTest(fixtures.MappedTest):
         bid = b1.id
 
         sess.expunge_all()
-
         node = sess.query(B).filter(B.id == bid).all()[0]
         eq_(node, B(id=1, name="b1", b_data="i"))
         eq_(node.children[0], B(id=2, name="b2", b_data="l"))
@@ -2020,18 +1975,14 @@ class DistinctPKTest(fixtures.MappedTest):
             pass
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         person_insert = person_table.insert()
-        connection.execute(person_insert, dict(id=1, name="alice"))
-        connection.execute(person_insert, dict(id=2, name="bob"))
+        person_insert.execute(id=1, name="alice")
+        person_insert.execute(id=2, name="bob")
 
         employee_insert = employee_table.insert()
-        connection.execute(
-            employee_insert, dict(id=2, salary=250, person_id=1)
-        )  # alice
-        connection.execute(
-            employee_insert, dict(id=3, salary=200, person_id=2)
-        )  # bob
+        employee_insert.execute(id=2, salary=250, person_id=1)  # alice
+        employee_insert.execute(id=3, salary=200, person_id=2)  # bob
 
     def test_implicit(self):
         person_mapper = mapper(Person, person_table)
@@ -2550,7 +2501,7 @@ class OptimizedLoadTest(fixtures.MappedTest):
         # columns in order to do the lookup.
         #
         # note this test can't fail when the fix is missing unless
-        # CursorResult._key_fallback no longer allows a non-matching column
+        # ResultProxy._key_fallback no longer allows a non-matching column
         # lookup without warning or raising.
 
         base, sub = self.tables.base, self.tables.sub
@@ -3396,7 +3347,7 @@ class DiscriminatorOrPkNoneTest(fixtures.DeclarativeMappedTest):
             __mapper_args__ = {"polymorphic_identity": "b"}
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Parent, A, B = cls.classes("Parent", "A", "B")
         s = Session()
 
@@ -3504,7 +3455,7 @@ class UnexpectedPolymorphicIdentityTest(fixtures.DeclarativeMappedTest):
             __mapper_args__ = {"polymorphic_identity": "subb"}
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         ASingleSubA, ASingleSubB, AJoinedSubA, AJoinedSubB = cls.classes(
             "ASingleSubA", "ASingleSubB", "AJoinedSubA", "AJoinedSubB"
         )

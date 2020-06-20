@@ -54,7 +54,7 @@ class _PolymorphicTestBase(object):
 
     def test_any_four(self):
         sess = Session()
-        any_ = Company.employees.of_type(Manager).any(
+        any_ = Company.employees.of_type(Boss).any(
             Manager.manager_name == "pointy"
         )
         eq_(sess.query(Company).filter(any_).one(), self.c1)
@@ -569,8 +569,8 @@ class SubclassRelationshipTest(
             name = Column(String(10))
 
     @classmethod
-    def insert_data(cls, connection):
-        s = Session(connection)
+    def insert_data(cls):
+        s = Session(testing.db)
 
         s.add_all(cls._fixture())
         s.commit()
@@ -1027,8 +1027,8 @@ class SubclassRelationshipTest2(
             c = relationship("C", backref="ds")
 
     @classmethod
-    def insert_data(cls, connection):
-        s = Session(connection)
+    def insert_data(cls):
+        s = Session(testing.db)
 
         s.add_all(cls._fixture())
         s.commit()

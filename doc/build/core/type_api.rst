@@ -1,4 +1,4 @@
-.. currentmodule:: sqlalchemy.types
+.. module:: sqlalchemy.types
 
 .. _types_api:
 

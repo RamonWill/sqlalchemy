@@ -2,6 +2,7 @@ import operator
 import re
 
 import sqlalchemy as sa
+from .. import assert_raises_message
 from .. import config
 from .. import engines
 from .. import eq_
@@ -12,6 +13,7 @@ from ..provision import temp_table_keyword_args
 from ..schema import Column
 from ..schema import Table
 from ... import event
+from ... import exc as sa_exc
 from ... import ForeignKey
 from ... import inspect
 from ... import Integer
@@ -652,6 +654,19 @@ class ComponentReflectionTest(fixtures.TablesTest):
     def test_get_pk_constraint_with_schema(self):
         self._test_get_pk_constraint(schema=testing.config.test_schema)
 
+    @testing.requires.table_reflection
+    @testing.provide_metadata
+    def test_deprecated_get_primary_keys(self):
+        meta = self.metadata
+        users = self.tables.users
+        insp = inspect(meta.bind)
+        assert_raises_message(
+            sa_exc.SADeprecationWarning,
+            r".*get_primary_keys\(\) method is deprecated",
+            insp.get_primary_keys,
+            users.name,
+        )
+
     @testing.provide_metadata
     def _test_get_foreign_keys(self, schema=None):
         meta = self.metadata
@@ -1228,8 +1243,7 @@ class ComputedReflectionTest(fixtures.ComputedReflectionFixtureTest):
                 data, "computed_stored", "normal-42", True,
             )
 
-    @testing.requires.schemas
-    def test_get_column_returns_persisted_with_schema(self):
+    def test_get_column_returns_persisted_with_schama(self):
         insp = inspect(config.db)
 
         cols = insp.get_columns(

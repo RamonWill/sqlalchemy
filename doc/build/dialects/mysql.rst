@@ -191,6 +191,11 @@ OurSQL
 
 .. automodule:: sqlalchemy.dialects.mysql.oursql
 
+Google App Engine
+-----------------
+
+.. automodule:: sqlalchemy.dialects.mysql.gaerdbms
+
 pyodbc
 ------
 

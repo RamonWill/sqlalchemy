@@ -13,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy import Integer
 from sqlalchemy import literal
 from sqlalchemy import literal_column
+from sqlalchemy import MetaData
 from sqlalchemy import Numeric
 from sqlalchemy import select
 from sqlalchemy import Sequence
@@ -36,6 +37,7 @@ from sqlalchemy.sql.functions import GenericFunction
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
+from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
@@ -943,10 +945,11 @@ class ReturnTypeTest(AssertsCompiledSQL, fixtures.TestBase):
 class ExecuteTest(fixtures.TestBase):
     __backend__ = True
 
+    @engines.close_first
     def tearDown(self):
         pass
 
-    def test_conn_execute(self, connection):
+    def test_conn_execute(self):
         from sqlalchemy.sql.expression import FunctionElement
         from sqlalchemy.ext.compiler import compiles
 
@@ -957,14 +960,17 @@ class ExecuteTest(fixtures.TestBase):
         def compile_(elem, compiler, **kw):
             return compiler.process(func.current_date())
 
-        x = connection.execute(func.current_date()).scalar()
-        y = connection.execute(func.current_date().select()).scalar()
-        z = connection.scalar(func.current_date())
-        q = connection.scalar(myfunc())
-
+        conn = testing.db.connect()
+        try:
+            x = conn.execute(func.current_date()).scalar()
+            y = conn.execute(func.current_date().select()).scalar()
+            z = conn.scalar(func.current_date())
+            q = conn.scalar(myfunc())
+        finally:
+            conn.close()
         assert (x == y == z == q) is True
 
-    def test_exec_options(self, connection):
+    def test_exec_options(self):
         f = func.foo()
         eq_(f._execution_options, {})
 
@@ -973,12 +979,13 @@ class ExecuteTest(fixtures.TestBase):
         s = f.select()
         eq_(s._execution_options, {"foo": "bar"})
 
-        ret = connection.execute(func.now().execution_options(foo="bar"))
+        ret = testing.db.execute(func.now().execution_options(foo="bar"))
         eq_(ret.context.execution_options, {"foo": "bar"})
         ret.close()
 
+    @engines.close_first
     @testing.provide_metadata
-    def test_update(self, connection):
+    def test_update(self):
         """
         Tests sending functions and SQL expressions to the VALUES and SET
         clauses of INSERT/UPDATE instances, and that column-level defaults
@@ -991,7 +998,7 @@ class ExecuteTest(fixtures.TestBase):
             meta,
             Column(
                 "id",
-                testing.db.dialect.sequence_default_column_type,
+                Integer,
                 Sequence("t1idseq", optional=True),
                 primary_key=True,
             ),
@@ -1002,93 +1009,78 @@ class ExecuteTest(fixtures.TestBase):
             meta,
             Column(
                 "id",
-                testing.db.dialect.sequence_default_column_type,
+                Integer,
                 Sequence("t2idseq", optional=True),
                 primary_key=True,
             ),
             Column("value", Integer, default=7),
             Column("stuff", String(20), onupdate="thisisstuff"),
         )
-        meta.create_all(connection)
-        connection.execute(t.insert(values=dict(value=func.length("one"))))
-        eq_(connection.execute(t.select()).first().value, 3)
-        connection.execute(t.update(values=dict(value=func.length("asfda"))))
-        eq_(connection.execute(t.select()).first().value, 5)
+        meta.create_all()
+        t.insert(values=dict(value=func.length("one"))).execute()
+        assert t.select().execute().first().value == 3
+        t.update(values=dict(value=func.length("asfda"))).execute()
+        assert t.select().execute().first().value == 5
 
-        r = connection.execute(
-            t.insert(values=dict(value=func.length("sfsaafsda")))
-        )
+        r = t.insert(values=dict(value=func.length("sfsaafsda"))).execute()
         id_ = r.inserted_primary_key[0]
-        eq_(connection.execute(t.select(t.c.id == id_)).first().value, 9)
-        connection.execute(t.update(values={t.c.value: func.length("asdf")}))
-        eq_(connection.execute(t.select()).first().value, 4)
-        connection.execute(t2.insert())
-        connection.execute(t2.insert(values=dict(value=func.length("one"))))
-        connection.execute(
-            t2.insert(values=dict(value=func.length("asfda") + -19)),
-            stuff="hi",
+        assert t.select(t.c.id == id_).execute().first().value == 9
+        t.update(values={t.c.value: func.length("asdf")}).execute()
+        assert t.select().execute().first().value == 4
+        t2.insert().execute()
+        t2.insert(values=dict(value=func.length("one"))).execute()
+        t2.insert(values=dict(value=func.length("asfda") + -19)).execute(
+            stuff="hi"
         )
 
-        res = sorted(connection.execute(select([t2.c.value, t2.c.stuff])))
+        res = exec_sorted(select([t2.c.value, t2.c.stuff]))
         eq_(res, [(-14, "hi"), (3, None), (7, None)])
 
-        connection.execute(
-            t2.update(values=dict(value=func.length("asdsafasd"))),
-            stuff="some stuff",
+        t2.update(values=dict(value=func.length("asdsafasd"))).execute(
+            stuff="some stuff"
         )
+        assert select([t2.c.value, t2.c.stuff]).execute().fetchall() == [
+            (9, "some stuff"),
+            (9, "some stuff"),
+            (9, "some stuff"),
+        ]
+
+        t2.delete().execute()
+
+        t2.insert(values=dict(value=func.length("one") + 8)).execute()
+        assert t2.select().execute().first().value == 11
+
+        t2.update(values=dict(value=func.length("asfda"))).execute()
         eq_(
-            connection.execute(select([t2.c.value, t2.c.stuff])).fetchall(),
-            [(9, "some stuff"), (9, "some stuff"), (9, "some stuff")],
-        )
-
-        connection.execute(t2.delete())
-
-        connection.execute(
-            t2.insert(values=dict(value=func.length("one") + 8))
-        )
-        eq_(connection.execute(t2.select()).first().value, 11)
-
-        connection.execute(t2.update(values=dict(value=func.length("asfda"))))
-        eq_(
-            connection.execute(select([t2.c.value, t2.c.stuff])).first(),
+            select([t2.c.value, t2.c.stuff]).execute().first(),
             (5, "thisisstuff"),
         )
 
-        connection.execute(
-            t2.update(
-                values={
-                    t2.c.value: func.length("asfdaasdf"),
-                    t2.c.stuff: "foo",
-                }
-            )
-        )
+        t2.update(
+            values={t2.c.value: func.length("asfdaasdf"), t2.c.stuff: "foo"}
+        ).execute()
 
-        eq_(
-            connection.execute(select([t2.c.value, t2.c.stuff])).first(),
-            (9, "foo"),
-        )
+        eq_(select([t2.c.value, t2.c.stuff]).execute().first(), (9, "foo"))
 
     @testing.fails_on_everything_except("postgresql")
-    def test_as_from(self, connection):
+    def test_as_from(self):
         # TODO: shouldn't this work on oracle too ?
-        x = connection.execute(func.current_date(bind=testing.db)).scalar()
-        y = connection.execute(
-            func.current_date(bind=testing.db).select()
+        x = func.current_date(bind=testing.db).execute().scalar()
+        y = func.current_date(bind=testing.db).select().execute().scalar()
+        z = func.current_date(bind=testing.db).scalar()
+        w = select(
+            ["*"], from_obj=[func.current_date(bind=testing.db)]
         ).scalar()
-        z = connection.scalar(func.current_date(bind=testing.db))
-        w = connection.scalar(
-            select(["*"], from_obj=[func.current_date(bind=testing.db)])
-        )
 
         assert x == y == z == w
 
-    def test_extract_bind(self, connection):
+    def test_extract_bind(self):
         """Basic common denominator execution tests for extract()"""
 
         date = datetime.date(2010, 5, 1)
 
         def execute(field):
-            return connection.execute(select([extract(field, date)])).scalar()
+            return testing.db.execute(select([extract(field, date)])).scalar()
 
         assert execute("year") == 2010
         assert execute("month") == 5
@@ -1100,25 +1092,34 @@ class ExecuteTest(fixtures.TestBase):
         assert execute("month") == 5
         assert execute("day") == 1
 
-    @testing.provide_metadata
-    def test_extract_expression(self, connection):
-        meta = self.metadata
+    def test_extract_expression(self):
+        meta = MetaData(testing.db)
         table = Table("test", meta, Column("dt", DateTime), Column("d", Date))
-        meta.create_all(connection)
-        connection.execute(
-            table.insert(),
-            {
-                "dt": datetime.datetime(2010, 5, 1, 12, 11, 10),
-                "d": datetime.date(2010, 5, 1),
-            },
-        )
-        rs = connection.execute(
-            select([extract("year", table.c.dt), extract("month", table.c.d)])
-        )
-        row = rs.first()
-        assert row[0] == 2010
-        assert row[1] == 5
-        rs.close()
+        meta.create_all()
+        try:
+            table.insert().execute(
+                {
+                    "dt": datetime.datetime(2010, 5, 1, 12, 11, 10),
+                    "d": datetime.date(2010, 5, 1),
+                }
+            )
+            rs = select(
+                [extract("year", table.c.dt), extract("month", table.c.d)]
+            ).execute()
+            row = rs.first()
+            assert row[0] == 2010
+            assert row[1] == 5
+            rs.close()
+        finally:
+            meta.drop_all()
+
+
+def exec_sorted(statement, *args, **kw):
+    """Executes a statement and returns a sorted list plain tuple rows."""
+
+    return sorted(
+        [tuple(row) for row in statement.execute(*args, **kw).fetchall()]
+    )
 
 
 class RegisterTest(fixtures.TestBase, AssertsCompiledSQL):

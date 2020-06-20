@@ -8,8 +8,8 @@ from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
 from sqlalchemy import Unicode
-from sqlalchemy.engine.row import LegacyRow
-from sqlalchemy.engine.row import Row
+from sqlalchemy.engine.result import LegacyRow
+from sqlalchemy.engine.result import Row
 from sqlalchemy.testing import AssertsExecutionResults
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
@@ -86,17 +86,11 @@ class ResultSetTest(fixtures.TestBase, AssertsExecutionResults):
 
     @profiling.function_call_count()
     def test_string(self):
-        with testing.db.connect().execution_options(
-            compiled_cache=None
-        ) as conn:
-            [tuple(row) for row in conn.execute(t.select()).fetchall()]
+        [tuple(row) for row in t.select().execute().fetchall()]
 
     @profiling.function_call_count()
     def test_unicode(self):
-        with testing.db.connect().execution_options(
-            compiled_cache=None
-        ) as conn:
-            [tuple(row) for row in conn.execute(t2.select()).fetchall()]
+        [tuple(row) for row in t2.select().execute().fetchall()]
 
     @profiling.function_call_count(variance=0.10)
     def test_raw_string(self):
@@ -113,53 +107,6 @@ class ResultSetTest(fixtures.TestBase, AssertsExecutionResults):
         )
         with testing.db.connect() as conn:
             [tuple(row) for row in conn.exec_driver_sql(stmt).fetchall()]
-
-    @profiling.function_call_count()
-    def test_fetch_by_key_legacy(self):
-        with testing.db.connect().execution_options(
-            compiled_cache=None
-        ) as conn:
-            for row in conn.execute(t.select()).fetchall():
-                [row["field%d" % fnum] for fnum in range(NUM_FIELDS)]
-
-    @profiling.function_call_count()
-    def test_fetch_by_key_mappings(self):
-        with testing.db.connect().execution_options(
-            compiled_cache=None
-        ) as conn:
-            for row in conn.execute(t.select()).mappings().fetchall():
-                [row["field%d" % fnum] for fnum in range(NUM_FIELDS)]
-
-    @testing.combinations(
-        (False, 0), (True, 1), (False, 1), (False, 2),
-    )
-    def test_one_or_none(self, one_or_first, rows_present):
-        # TODO: this is not testing the ORM level "scalar_mapping"
-        # mode which has a different performance profile
-        with testing.db.connect().execution_options(
-            compiled_cache=None
-        ) as conn:
-            stmt = t.select()
-            if rows_present == 0:
-                stmt = stmt.where(1 == 0)
-            elif rows_present == 1:
-                stmt = stmt.limit(1)
-
-            result = conn.execute(stmt)
-
-            @profiling.function_call_count()
-            def go():
-                if one_or_first:
-                    result.one()
-                else:
-                    result.first()
-
-            try:
-                go()
-            finally:
-                # hmmmm, connection close context manager does not
-                # seem to be handling this for a profile that skips
-                result.close()
 
     def test_contains_doesnt_compile(self):
         row = t.select().execute().first()
@@ -228,9 +175,7 @@ class RowTest(fixtures.TestBase):
             for key in keyobjs:
                 keymap[key] = (index, key)
             keymap[index] = (index, key)
-        return row_cls(
-            metadata, processors, keymap, row_cls._default_key_style, row
-        )
+        return row_cls(metadata, processors, keymap, row)
 
     def _test_getitem_value_refcounts_legacy(self, seq_factory):
         col1, col2 = object(), object()

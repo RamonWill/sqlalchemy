@@ -5,8 +5,6 @@
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-from .. import util
-
 
 class SQLRole(object):
     """Define a "role" within a SQL statement structure.
@@ -21,7 +19,7 @@ class SQLRole(object):
 
 
 class UsesInspection(object):
-    _post_inspect = None
+    pass
 
 
 class ColumnArgumentRole(SQLRole):
@@ -54,14 +52,6 @@ class LimitOffsetRole(SQLRole):
 
 class ByOfRole(ColumnListRole):
     _role_name = "GROUP BY / OF / etc. expression"
-
-
-class GroupByRole(UsesInspection, ByOfRole):
-    # note there's a special case right now where you can pass a whole
-    # ORM entity to group_by() and it splits out.   we may not want to keep
-    # this around
-
-    _role_name = "GROUP BY expression"
 
 
 class OrderByRole(ByOfRole):
@@ -102,14 +92,7 @@ class InElementRole(SQLRole):
     )
 
 
-class JoinTargetRole(UsesInspection, StructuralRole):
-    _role_name = (
-        "Join target, typically a FROM expression, or ORM "
-        "relationship attribute"
-    )
-
-
-class FromClauseRole(ColumnsClauseRole, JoinTargetRole):
+class FromClauseRole(ColumnsClauseRole):
     _role_name = "FROM expression, such as a Table or alias() object"
 
     _is_subquery = False
@@ -144,15 +127,11 @@ class AnonymizedFromClauseRole(StrictFromClauseRole):
 
 
 class CoerceTextStatementRole(SQLRole):
-    _role_name = "Executable SQL or text() construct"
+    _role_name = "Executable SQL, text() construct, or string statement"
 
 
 class StatementRole(CoerceTextStatementRole):
     _role_name = "Executable SQL or text() construct"
-
-    _is_future = False
-
-    _propagate_attrs = util.immutabledict()
 
 
 class ReturnsRowsRole(StatementRole):
@@ -184,13 +163,8 @@ class CompoundElementRole(SQLRole):
     )
 
 
-# TODO: are we using this?
 class DMLRole(StatementRole):
     pass
-
-
-class DMLTableRole(FromClauseRole):
-    _role_name = "subject table for an INSERT, UPDATE or DELETE"
 
 
 class DMLColumnRole(SQLRole):

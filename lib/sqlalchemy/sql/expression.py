@@ -19,7 +19,6 @@ __all__ = [
     "AliasedReturnsRows",
     "any_",
     "all_",
-    "CacheKey",
     "ClauseElement",
     "ColumnCollection",
     "ColumnElement",
@@ -160,7 +159,6 @@ from .selectable import TableSample  # noqa
 from .selectable import TextAsFrom  # noqa
 from .selectable import TextualSelect  # noqa
 from .selectable import Values  # noqa
-from .traversals import CacheKey  # noqa
 from .visitors import Visitable  # noqa
 from ..util.langhelpers import public_factory  # noqa
 

@@ -842,17 +842,6 @@ class O2OSingleParentNoFlushTest(fixtures.MappedTest):
         sess.add(u1)
         sess.commit()
 
-        # in this case, u1.address has active history set, because
-        # this operation necessarily replaces the old object which must be
-        # loaded.
-        # the set operation requires that "u1" is unexpired, because the
-        # replace operation wants to load the
-        # previous value.  The original test case for #2921 only included
-        # that the lazyload operation passed a no autoflush flag through
-        # to the operation, however in #5226 this has been enhanced to pass
-        # the no autoflush flag down through to the unexpire of the attributes
-        # as well, so that attribute unexpire can otherwise invoke autoflush.
-        assert "id" not in u1.__dict__
         a2 = Address(email_address="asdf")
         sess.add(a2)
         u1.address = a2
@@ -1576,7 +1565,7 @@ class M2OCascadeDeleteOrphanTestOne(fixtures.MappedTest):
         mapper(Foo, foo)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Pref, User, Extra = (
             cls.classes.Pref,
             cls.classes.User,
@@ -1586,7 +1575,7 @@ class M2OCascadeDeleteOrphanTestOne(fixtures.MappedTest):
         u1 = User(name="ed", pref=Pref(data="pref 1", extra=[Extra()]))
         u2 = User(name="jack", pref=Pref(data="pref 2", extra=[Extra()]))
         u3 = User(name="foo", pref=Pref(data="pref 3", extra=[Extra()]))
-        sess = create_session(connection)
+        sess = create_session()
         sess.add_all((u1, u2, u3))
         sess.flush()
         sess.close()
@@ -2247,7 +2236,7 @@ class M2MCascadeTest(fixtures.MappedTest):
         mapper(B, b)
         assert_raises_message(
             sa_exc.ArgumentError,
-            "For many-to-many relationship A.bs, delete-orphan cascade",
+            "On A.bs, delete-orphan cascade is not supported",
             configure_mappers,
         )
 

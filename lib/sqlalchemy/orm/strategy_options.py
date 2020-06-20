@@ -14,7 +14,7 @@ from .base import _class_to_mapper
 from .base import _is_aliased_class
 from .base import _is_mapped_class
 from .base import InspectionAttr
-from .interfaces import LoaderOption
+from .interfaces import MapperOption
 from .interfaces import PropComparator
 from .path_registry import _DEFAULT_TOKEN
 from .path_registry import _WILDCARD_TOKEN
@@ -29,33 +29,31 @@ from ..sql import roles
 from ..sql import visitors
 from ..sql.base import _generative
 from ..sql.base import Generative
+from ..sql.traversals import HasCacheKey
 
 
-class Load(Generative, LoaderOption):
+class Load(HasCacheKey, Generative, MapperOption):
     """Represents loader options which modify the state of a
-    :class:`_query.Query` in order to affect how various mapped attributes are
+    :class:`.Query` in order to affect how various mapped attributes are
     loaded.
 
-    The :class:`_orm.Load` object is in most cases used implicitly behind the
-    scenes when one makes use of a query option like :func:`_orm.joinedload`,
-    :func:`.defer`, or similar.   However, the :class:`_orm.Load` object
+    The :class:`.Load` object is in most cases used implicitly behind the
+    scenes when one makes use of a query option like :func:`.joinedload`,
+    :func:`.defer`, or similar.   However, the :class:`.Load` object
     can also be used directly, and in some cases can be useful.
 
-    To use :class:`_orm.Load` directly, instantiate it with the target mapped
+    To use :class:`.Load` directly, instantiate it with the target mapped
     class as the argument.   This style of usage is
-    useful when dealing with a :class:`_query.Query`
-    that has multiple entities::
+    useful when dealing with a :class:`.Query` that has multiple entities::
 
         myopt = Load(MyClass).joinedload("widgets")
 
-    The above ``myopt`` can now be used with :meth:`_query.Query.options`,
-    where it
+    The above ``myopt`` can now be used with :meth:`.Query.options`, where it
     will only take effect for the ``MyClass`` entity::
 
         session.query(MyClass, MyOtherClass).options(myopt)
 
-    One case where :class:`_orm.Load`
-    is useful as public API is when specifying
+    One case where :class:`.Load` is useful as public API is when specifying
     "wildcard" options that only take effect for a certain class::
 
         session.query(Order).options(Load(Order).lazyload('*'))
@@ -195,32 +193,24 @@ class Load(Generative, LoaderOption):
     propagate_to_loaders = False
     _of_type = None
 
-    def process_compile_state(self, compile_state):
-        if not compile_state.compile_options._enable_eagerloads:
-            return
+    def process_query(self, query):
+        self._process(query, True)
 
-        self._process(compile_state, not bool(compile_state.current_path))
+    def process_query_conditionally(self, query):
+        self._process(query, False)
 
-    def _process(self, compile_state, raiseerr):
-        current_path = compile_state.current_path
+    def _process(self, query, raiseerr):
+        current_path = query._current_path
         if current_path:
             for (token, start_path), loader in self.context.items():
                 chopped_start_path = self._chop_path(start_path, current_path)
                 if chopped_start_path is not None:
-                    compile_state.attributes[
-                        (token, chopped_start_path)
-                    ] = loader
+                    query._attributes[(token, chopped_start_path)] = loader
         else:
-            compile_state.attributes.update(self.context)
+            query._attributes.update(self.context)
 
     def _generate_path(
-        self,
-        path,
-        attr,
-        for_strategy,
-        wildcard_key,
-        raiseerr=True,
-        polymorphic_entity_context=None,
+        self, path, attr, for_strategy, wildcard_key, raiseerr=True
     ):
         existing_of_type = self._of_type
         self._of_type = None
@@ -322,11 +312,8 @@ class Load(Generative, LoaderOption):
                 ac = attr._of_type
                 ext_info = of_type_info = inspect(ac)
 
-                if polymorphic_entity_context is None:
-                    polymorphic_entity_context = self.context
-
                 existing = path.entity_path[prop].get(
-                    polymorphic_entity_context, "path_with_polymorphic"
+                    self.context, "path_with_polymorphic"
                 )
 
                 if not ext_info.is_aliased_class:
@@ -343,7 +330,7 @@ class Load(Generative, LoaderOption):
                     ext_info = inspect(ac)
 
                 path.entity_path[prop].set(
-                    polymorphic_entity_context, "path_with_polymorphic", ac
+                    self.context, "path_with_polymorphic", ac
                 )
 
                 path = path[prop][ext_info]
@@ -376,8 +363,7 @@ class Load(Generative, LoaderOption):
 
     @_generative
     def options(self, *opts):
-        r"""Apply a series of options as sub-options to this
-        :class:`_orm.Load`
+        r"""Apply a series of options as sub-options to this :class:`.Load`
         object.
 
         E.g.::
@@ -393,8 +379,8 @@ class Load(Generative, LoaderOption):
                     )
 
         :param \*opts: A series of loader option objects (ultimately
-         :class:`_orm.Load` objects) which should be applied to the path
-         specified by this :class:`_orm.Load` object.
+         :class:`.Load` objects) which should be applied to the path
+         specified by this :class:`.Load` object.
 
         .. versionadded:: 1.3.6
 
@@ -433,6 +419,7 @@ class Load(Generative, LoaderOption):
     @_generative
     def set_column_strategy(self, attrs, strategy, opts=None, opts_only=False):
         strategy = self._coerce_strat(strategy)
+
         self.is_class_strategy = False
         for attr in attrs:
             cloned = self._clone_for_bind_strategy(
@@ -443,6 +430,7 @@ class Load(Generative, LoaderOption):
     @_generative
     def set_generic_strategy(self, attrs, strategy):
         strategy = self._coerce_strat(strategy)
+
         for attr in attrs:
             cloned = self._clone_for_bind_strategy(attr, strategy, None)
             cloned.propagate_to_loaders = True
@@ -480,14 +468,15 @@ class Load(Generative, LoaderOption):
 
     def _set_for_path(self, context, path, replace=True, merge_opts=False):
         if merge_opts or not replace:
-            existing = path.get(context, "loader")
+            existing = path.get(self.context, "loader")
+
             if existing:
                 if merge_opts:
                     existing.local_opts.update(self.local_opts)
             else:
                 path.set(context, "loader", self)
         else:
-            existing = path.get(context, "loader")
+            existing = path.get(self.context, "loader")
             path.set(context, "loader", self)
             if existing and existing.is_opts_only:
                 self.local_opts.update(existing.local_opts)
@@ -566,8 +555,8 @@ class Load(Generative, LoaderOption):
 class _UnboundLoad(Load):
     """Represent a loader option that isn't tied to a root entity.
 
-    The loader option will produce an entity-linked :class:`_orm.Load`
-    object when it is passed :meth:`_query.Query.options`.
+    The loader option will produce an entity-linked :class:`.Load`
+    object when it is passed :meth:`.Query.options`.
 
     This provides compatibility with the traditional system
     of freestanding options, e.g. ``joinedload('x.y.z')``.
@@ -692,18 +681,15 @@ class _UnboundLoad(Load):
         state["path"] = tuple(ret)
         self.__dict__ = state
 
-    def _process(self, compile_state, raiseerr):
-        dedupes = compile_state.attributes["_unbound_load_dedupes"]
+    def _process(self, query, raiseerr):
+        dedupes = query._attributes["_unbound_load_dedupes"]
         for val in self._to_bind:
             if val not in dedupes:
                 dedupes.add(val)
                 val._bind_loader(
-                    [
-                        ent.entity_zero
-                        for ent in compile_state._mapper_entities
-                    ],
-                    compile_state.current_path,
-                    compile_state.attributes,
+                    [ent.entity_zero for ent in query._mapper_entities],
+                    query._current_path,
+                    query._attributes,
                     raiseerr,
                 )
 
@@ -777,11 +763,7 @@ class _UnboundLoad(Load):
                     ret.append((token._parentmapper.class_, token.key, None))
                 else:
                     ret.append(
-                        (
-                            token._parentmapper.class_,
-                            token.key,
-                            token._of_type.entity if token._of_type else None,
-                        )
+                        (token._parentmapper.class_, token.key, token._of_type)
                     )
             elif isinstance(token, PropComparator):
                 ret.append((token._parentmapper.class_, token.key, None))
@@ -869,8 +851,9 @@ class _UnboundLoad(Load):
         # we just located, then go through the rest of our path
         # tokens and populate into the Load().
         loader = Load(path_element)
-
-        if context is None:
+        if context is not None:
+            loader.context = context
+        else:
             context = loader.context
 
         loader.strategy = self.strategy
@@ -887,7 +870,6 @@ class _UnboundLoad(Load):
                     self.strategy if idx == len(start_path) - 1 else None,
                     None,
                     raiseerr,
-                    polymorphic_entity_context=context,
                 ):
                     return
 
@@ -999,10 +981,10 @@ class loader_option(object):
     def _add_unbound_fn(self, fn):
         self._unbound_fn = fn
         fn_doc = self.fn.__doc__
-        self.fn.__doc__ = """Produce a new :class:`_orm.Load` object with the
-:func:`_orm.%(name)s` option applied.
+        self.fn.__doc__ = """Produce a new :class:`.Load` object with the
+:func:`.orm.%(name)s` option applied.
 
-See :func:`_orm.%(name)s` for usage examples.
+See :func:`.orm.%(name)s` for usage examples.
 
 """ % {
             "name": self.name
@@ -1012,14 +994,13 @@ See :func:`_orm.%(name)s` for usage examples.
         return self
 
     def _add_unbound_all_fn(self, fn):
-        fn.__doc__ = """Produce a standalone "all" option for
-:func:`_orm.%(name)s`.
+        fn.__doc__ = """Produce a standalone "all" option for :func:`.orm.%(name)s`.
 
 .. deprecated:: 0.9
 
-    The :func:`_orm.%(name)s_all` function is deprecated, and will be removed
-    in a future release.  Please use method chaining with
-    :func:`_orm.%(name)s` instead, as in::
+    The :func:`.%(name)s_all` function is deprecated, and will be removed
+    in a future release.  Please use method chaining with :func:`.%(name)s`
+    instead, as in::
 
         session.query(MyClass).options(
             %(name)s("someattribute").%(name)s("anotherattribute")
@@ -1029,8 +1010,6 @@ See :func:`_orm.%(name)s` for usage examples.
             "name": self.name
         }
         fn = util.deprecated(
-            # This is used by `baked_lazyload_all` was only deprecated in
-            # version 1.2 so this must stick around until that is removed
             "0.9",
             "The :func:`.%(name)s_all` function is deprecated, and will be "
             "removed in a future release.  Please use method chaining with "
@@ -1047,7 +1026,7 @@ def contains_eager(loadopt, attr, alias=None):
     r"""Indicate that the given attribute should be eagerly loaded from
     columns stated manually in the query.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     The option is used in conjunction with an explicit join that loads
@@ -1113,8 +1092,7 @@ def contains_eager(loadopt, attr, alias=None):
                 "Passing a string name for the 'alias' argument to "
                 "'contains_eager()` is deprecated, and will not work in a "
                 "future release.  Please use a sqlalchemy.alias() or "
-                "sqlalchemy.orm.aliased() construct.",
-                version="1.4",
+                "sqlalchemy.orm.aliased() construct."
             )
 
     elif getattr(attr, "_of_type", None):
@@ -1141,7 +1119,7 @@ def load_only(loadopt, *attrs):
     of column-based attribute names should be loaded; all others will be
     deferred.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     Example - given a class ``User``, load only the ``name`` and ``fullname``
@@ -1157,13 +1135,12 @@ def load_only(loadopt, *attrs):
                 subqueryload("addresses").load_only("email_address")
         )
 
-    For a :class:`_query.Query` that has multiple entities,
-    the lead entity can be
-    specifically referred to using the :class:`_orm.Load` constructor::
+    For a :class:`.Query` that has multiple entities, the lead entity can be
+    specifically referred to using the :class:`.Load` constructor::
 
         session.query(User, Address).join(User.addresses).options(
                     Load(User).load_only("name", "fullname"),
-                    Load(Address).load_only("email_address")
+                    Load(Address).load_only("email_addres")
                 )
 
 
@@ -1189,7 +1166,7 @@ def joinedload(loadopt, attr, innerjoin=None):
     """Indicate that the given attribute should be loaded using joined
     eager loading.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     examples::
@@ -1240,7 +1217,7 @@ def joinedload(loadopt, attr, innerjoin=None):
 
      .. note:: The "unnested" flag does **not** affect the JOIN rendered
         from a many-to-many association table, e.g. a table configured
-        as :paramref:`_orm.relationship.secondary`, to the target table; for
+        as :paramref:`.relationship.secondary`, to the target table; for
         correctness of results, these joins are always INNER and are
         therefore right-nested if linked to an OUTER join.
 
@@ -1252,17 +1229,15 @@ def joinedload(loadopt, attr, innerjoin=None):
 
     .. note::
 
-        The joins produced by :func:`_orm.joinedload` are **anonymously
+        The joins produced by :func:`.orm.joinedload` are **anonymously
         aliased**.  The criteria by which the join proceeds cannot be
-        modified, nor can the :class:`_query.Query`
-        refer to these joins in any way,
+        modified, nor can the :class:`.Query` refer to these joins in any way,
         including ordering.  See :ref:`zen_of_eager_loading` for further
         detail.
 
         To produce a specific SQL JOIN which is explicitly available, use
-        :meth:`_query.Query.join`.
-        To combine explicit JOINs with eager loading
-        of collections, use :func:`_orm.contains_eager`; see
+        :meth:`.Query.join`.   To combine explicit JOINs with eager loading
+        of collections, use :func:`.orm.contains_eager`; see
         :ref:`contains_eager`.
 
     .. seealso::
@@ -1288,7 +1263,7 @@ def subqueryload(loadopt, attr):
     """Indicate that the given attribute should be loaded using
     subquery eager loading.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     examples::
@@ -1326,7 +1301,7 @@ def selectinload(loadopt, attr):
     """Indicate that the given attribute should be loaded using
     SELECT IN eager loading.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     examples::
@@ -1365,7 +1340,7 @@ def lazyload(loadopt, attr):
     """Indicate that the given attribute should be loaded using "lazy"
     loading.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     .. seealso::
@@ -1392,7 +1367,7 @@ def immediateload(loadopt, attr):
     by the :func:`.selectinload` option, which performs the same task
     more efficiently by emitting a SELECT for all loaded objects.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     .. seealso::
@@ -1415,11 +1390,11 @@ def immediateload(*keys):
 def noload(loadopt, attr):
     """Indicate that the given relationship attribute should remain unloaded.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
-    :func:`_orm.noload` applies to :func:`_orm.relationship` attributes; for
-    column-based attributes, see :func:`_orm.defer`.
+    :func:`.orm.noload` applies to :func:`.relationship` attributes; for
+    column-based attributes, see :func:`.orm.defer`.
 
     .. seealso::
 
@@ -1439,7 +1414,7 @@ def noload(*keys):
 def raiseload(loadopt, attr, sql_only=False):
     """Indicate that the given attribute should raise an error if accessed.
 
-    A relationship attribute configured with :func:`_orm.raiseload` will
+    A relationship attribute configured with :func:`.orm.raiseload` will
     raise an :exc:`~sqlalchemy.exc.InvalidRequestError` upon access.   The
     typical way this is useful is when an application is attempting to ensure
     that all relationship attributes that are accessed in a particular context
@@ -1447,8 +1422,7 @@ def raiseload(loadopt, attr, sql_only=False):
     to read through SQL logs to ensure lazy loads aren't occurring, this
     strategy will cause them to raise immediately.
 
-    :func:`_orm.raiseload` applies to :func:`_orm.relationship`
-    attributes only.
+    :func:`.orm.raiseload` applies to :func:`.relationship` attributes only.
     In order to apply raise-on-SQL behavior to a column-based attribute,
     use the :paramref:`.orm.defer.raiseload` parameter on the :func:`.defer`
     loader option.
@@ -1458,7 +1432,7 @@ def raiseload(loadopt, attr, sql_only=False):
      related value should just be None due to missing keys.  When False, the
      strategy will raise for all varieties of relationship loading.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
 
@@ -1509,7 +1483,7 @@ def defaultload(loadopt, attr):
 
     .. seealso::
 
-        :meth:`_orm.Load.options` - allows for complex hierarchical
+        :meth:`.Load.options` - allows for complex hierarchical
         loader option structures with less verbosity than with individual
         :func:`.defaultload` directives.
 
@@ -1531,7 +1505,7 @@ def defer(loadopt, key, raiseload=False):
     r"""Indicate that the given column-oriented attribute should be deferred,
     e.g. not loaded until accessed.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     e.g.::
@@ -1549,13 +1523,12 @@ def defer(loadopt, key, raiseload=False):
     To specify a deferred load of an attribute on a related class,
     the path can be specified one token at a time, specifying the loading
     style for each link along the chain.  To leave the loading style
-    for a link unchanged, use :func:`_orm.defaultload`::
+    for a link unchanged, use :func:`.orm.defaultload`::
 
         session.query(MyClass).options(defaultload("someattr").defer("some_column"))
 
-    A :class:`_orm.Load` object that is present on a certain path can have
-    :meth:`_orm.Load.defer` called multiple times,
-    each will operate on the same
+    A :class:`.Load` object that is present on a certain path can have
+    :meth:`.Load.defer` called multiple times, each will operate on the same
     parent entity::
 
 
@@ -1582,7 +1555,7 @@ def defer(loadopt, key, raiseload=False):
      of specifying a path as a series of attributes, which is now superseded
      by the method-chained style.
 
-        .. deprecated:: 0.9  The \*addl_attrs on :func:`_orm.defer` is
+        .. deprecated:: 0.9  The \*addl_attrs on :func:`.orm.defer` is
            deprecated and will be removed in a future release.   Please
            use method chaining in conjunction with defaultload() to
            indicate a path.
@@ -1592,7 +1565,7 @@ def defer(loadopt, key, raiseload=False):
 
         :ref:`deferred`
 
-        :func:`_orm.undefer`
+        :func:`.orm.undefer`
 
     """
     strategy = {"deferred": True, "instrument": True}
@@ -1607,8 +1580,7 @@ def defer(key, *addl_attrs, **kw):
         util.warn_deprecated(
             "The *addl_attrs on orm.defer is deprecated.  Please use "
             "method chaining in conjunction with defaultload() to "
-            "indicate a path.",
-            version="1.3",
+            "indicate a path."
         )
     return _UnboundLoad._from_keys(
         _UnboundLoad.defer, (key,) + addl_attrs, False, kw
@@ -1623,7 +1595,7 @@ def undefer(loadopt, key):
     The column being undeferred is typically set up on the mapping as a
     :func:`.deferred` attribute.
 
-    This function is part of the :class:`_orm.Load` interface and supports
+    This function is part of the :class:`.Load` interface and supports
     both method-chained and standalone operation.
 
     Examples::
@@ -1645,7 +1617,7 @@ def undefer(loadopt, key):
      of specifying a path as a series of attributes, which is now superseded
      by the method-chained style.
 
-        .. deprecated:: 0.9  The \*addl_attrs on :func:`_orm.undefer` is
+        .. deprecated:: 0.9  The \*addl_attrs on :func:`.orm.undefer` is
            deprecated and will be removed in a future release.   Please
            use method chaining in conjunction with defaultload() to
            indicate a path.
@@ -1654,9 +1626,9 @@ def undefer(loadopt, key):
 
         :ref:`deferred`
 
-        :func:`_orm.defer`
+        :func:`.orm.defer`
 
-        :func:`_orm.undefer_group`
+        :func:`.orm.undefer_group`
 
     """
     return loadopt.set_column_strategy(
@@ -1670,8 +1642,7 @@ def undefer(key, *addl_attrs):
         util.warn_deprecated(
             "The *addl_attrs on orm.undefer is deprecated.  Please use "
             "method chaining in conjunction with defaultload() to "
-            "indicate a path.",
-            version="1.3",
+            "indicate a path."
         )
     return _UnboundLoad._from_keys(
         _UnboundLoad.undefer, (key,) + addl_attrs, False, {}
@@ -1692,21 +1663,21 @@ def undefer_group(loadopt, name):
 
     To undefer a group of attributes on a related entity, the path can be
     spelled out using relationship loader options, such as
-    :func:`_orm.defaultload`::
+    :func:`.orm.defaultload`::
 
         session.query(MyClass).options(
             defaultload("someattr").undefer_group("large_attrs"))
 
-    .. versionchanged:: 0.9.0 :func:`_orm.undefer_group` is now specific to a
+    .. versionchanged:: 0.9.0 :func:`.orm.undefer_group` is now specific to a
        particular entity load path.
 
     .. seealso::
 
         :ref:`deferred`
 
-        :func:`_orm.defer`
+        :func:`.orm.defer`
 
-        :func:`_orm.undefer`
+        :func:`.orm.undefer`
 
     """
     return loadopt.set_column_strategy(
@@ -1723,7 +1694,7 @@ def undefer_group(name):
 def with_expression(loadopt, key, expression):
     r"""Apply an ad-hoc SQL expression to a "deferred expression" attribute.
 
-    This option is used in conjunction with the :func:`_orm.query_expression`
+    This option is used in conjunction with the :func:`.orm.query_expression`
     mapper-level construct that indicates an attribute which should be the
     target of an ad-hoc SQL expression.
 
@@ -1775,7 +1746,7 @@ def selectin_polymorphic(loadopt, classes):
 
     .. seealso::
 
-        :ref:`polymorphic_selectin`
+        :ref:`inheritance_polymorphic_load`
 
     """
     loadopt.set_class_strategy(

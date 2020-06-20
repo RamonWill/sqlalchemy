@@ -245,7 +245,7 @@ class QueryUnicodeTest(fixtures.TestBase):
     @testing.requires.mssql_freetds
     @testing.requires.python2
     @testing.provide_metadata
-    def test_convert_unicode(self, connection):
+    def test_convert_unicode(self):
         meta = self.metadata
         t1 = Table(
             "unitest_table",
@@ -253,27 +253,26 @@ class QueryUnicodeTest(fixtures.TestBase):
             Column("id", Integer, primary_key=True),
             Column("descr", mssql.MSText()),
         )
-        meta.create_all(connection)
-        connection.execute(
-            ue("insert into unitest_table values ('abc \xc3\xa9 def')").encode(
-                "UTF-8"
+        meta.create_all()
+        with testing.db.connect() as con:
+            con.execute(
+                ue(
+                    "insert into unitest_table values ('abc \xc3\xa9 def')"
+                ).encode("UTF-8")
             )
-        )
-        r = connection.execute(t1.select()).first()
-        assert isinstance(r[1], util.text_type), (
-            "%s is %s instead of unicode, working on %s"
-            % (r[1], type(r[1]), meta.bind)
-        )
-        eq_(r[1], util.ue("abc \xc3\xa9 def"))
+            r = con.execute(t1.select()).first()
+            assert isinstance(r[1], util.text_type), (
+                "%s is %s instead of unicode, working on %s"
+                % (r[1], type(r[1]), meta.bind)
+            )
+            eq_(r[1], util.ue("abc \xc3\xa9 def"))
 
 
 class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
     __only_on__ = "mssql"
     __backend__ = True
 
-    @testing.provide_metadata
-    def test_fetchid_trigger(self, connection):
-        # TODO: investigate test hang on mssql when connection fixture is used
+    def test_fetchid_trigger(self):
         """
         Verify identity return value on inserting to a trigger table.
 
@@ -300,12 +299,12 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         with the init parameter 'implicit_returning = False'.
         """
 
-        # TODO: this same test needs to be tried in a multithreaded context
+        # todo: this same test needs to be tried in a multithreaded context
         #      with multiple threads inserting to the same table.
-        # TODO: check whether this error also occurs with clients other
+        # todo: check whether this error also occurs with clients other
         #      than the SQL Server Native Client. Maybe an assert_raises
         #      test should be written.
-        meta = self.metadata
+        meta = MetaData(testing.db)
         t1 = Table(
             "t1",
             meta,
@@ -324,31 +323,24 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
             Column("id", Integer, mssql_identity_start=200, primary_key=True),
             Column("descr", String(200)),
         )
-
-        event.listen(
-            meta,
-            "after_create",
-            DDL(
-                "create trigger paj on t1 for insert as "
-                "insert into t2 (descr) select descr from inserted"
-            ),
+        meta.create_all()
+        con = testing.db.connect()
+        con.exec_driver_sql(
+            """create trigger paj on t1 for insert as
+            insert into t2 (descr) select descr from inserted"""
         )
 
-        # this DROP is not actually needed since SQL Server transactional
-        # DDL is reverting it with the connection fixture.  however,
-        # since we can use "if exists" it's safe to have this here in
-        # case things change.
-        event.listen(
-            meta, "before_drop", DDL("""drop trigger if exists paj""")
-        )
+        try:
+            tr = con.begin()
+            r = con.execute(t2.insert(), descr="hello")
+            self.assert_(r.inserted_primary_key == [200])
+            r = con.execute(t1.insert(), descr="hello")
+            self.assert_(r.inserted_primary_key == [100])
 
-        # seems to work with all linux drivers + backend.  not sure
-        # if windows drivers / servers have different behavior here.
-        meta.create_all(connection)
-        r = connection.execute(t2.insert(), descr="hello")
-        self.assert_(r.inserted_primary_key == [200])
-        r = connection.execute(t1.insert(), descr="hello")
-        self.assert_(r.inserted_primary_key == [100])
+        finally:
+            tr.commit()
+            con.exec_driver_sql("""drop trigger paj""")
+            meta.drop_all()
 
     @testing.provide_metadata
     def _test_disable_scope_identity(self):
@@ -438,27 +430,8 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
             options=dict(legacy_schema_aliasing=False)
         )
         meta.bind = eng
-        conn = eng.connect()
-        conn.exec_driver_sql("create schema paj")
-
-        @event.listens_for(meta, "after_drop")
-        def cleanup(target, connection, **kw):
-            connection.exec_driver_sql("drop schema paj")
-
-        tbl = Table(
-            "test", meta, Column("id", Integer, primary_key=True), schema="paj"
-        )
-        tbl.create(conn)
-        conn.execute(tbl.insert(), {"id": 1})
-        eq_(conn.scalar(tbl.select()), 1)
-
-    @testing.provide_metadata
-    def test_insertid_schema_legacy(self):
-        meta = self.metadata
-        eng = engines.testing_engine(options=dict(legacy_schema_aliasing=True))
-        meta.bind = eng
-        conn = eng.connect()
-        conn.exec_driver_sql("create schema paj")
+        con = eng.connect()
+        con.exec_driver_sql("create schema paj")
 
         @event.listens_for(meta, "after_drop")
         def cleanup(target, connection, **kw):
@@ -472,7 +445,26 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         eq_(tbl.select().scalar(), 1)
 
     @testing.provide_metadata
-    def test_returning_no_autoinc(self, connection):
+    def test_insertid_schema_legacy(self):
+        meta = self.metadata
+        eng = engines.testing_engine(options=dict(legacy_schema_aliasing=True))
+        meta.bind = eng
+        con = eng.connect()
+        con.exec_driver_sql("create schema paj")
+
+        @event.listens_for(meta, "after_drop")
+        def cleanup(target, connection, **kw):
+            connection.exec_driver_sql("drop schema paj")
+
+        tbl = Table(
+            "test", meta, Column("id", Integer, primary_key=True), schema="paj"
+        )
+        tbl.create()
+        tbl.insert().execute({"id": 1})
+        eq_(tbl.select().scalar(), 1)
+
+    @testing.provide_metadata
+    def test_returning_no_autoinc(self):
         meta = self.metadata
         table = Table(
             "t1",
@@ -480,11 +472,12 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
             Column("id", Integer, primary_key=True),
             Column("data", String(50)),
         )
-        table.create(connection)
-        result = connection.execute(
+        table.create()
+        result = (
             table.insert()
             .values(id=1, data=func.lower("SomeString"))
             .returning(table.c.id, table.c.data)
+            .execute()
         )
         eq_(result.fetchall(), [(1, "somestring")])
 
@@ -495,8 +488,8 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
             options=dict(legacy_schema_aliasing=False)
         )
         meta.bind = eng
-        conn = eng.connect()
-        conn.exec_driver_sql("create schema paj")
+        con = eng.connect()
+        con.exec_driver_sql("create schema paj")
 
         @event.listens_for(meta, "after_drop")
         def cleanup(target, connection, **kw):
@@ -505,19 +498,19 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         tbl = Table(
             "test", meta, Column("id", Integer, primary_key=True), schema="paj"
         )
-        tbl.create(conn)
-        conn.execute(tbl.insert(), {"id": 1})
-        eq_(conn.scalar(tbl.select()), 1)
-        conn.execute(tbl.delete(tbl.c.id == 1))
-        eq_(conn.scalar(tbl.select()), None)
+        tbl.create()
+        tbl.insert().execute({"id": 1})
+        eq_(tbl.select().scalar(), 1)
+        tbl.delete(tbl.c.id == 1).execute()
+        eq_(tbl.select().scalar(), None)
 
     @testing.provide_metadata
     def test_delete_schema_legacy(self):
         meta = self.metadata
         eng = engines.testing_engine(options=dict(legacy_schema_aliasing=True))
         meta.bind = eng
-        conn = eng.connect()
-        conn.exec_driver_sql("create schema paj")
+        con = eng.connect()
+        con.exec_driver_sql("create schema paj")
 
         @event.listens_for(meta, "after_drop")
         def cleanup(target, connection, **kw):
@@ -526,20 +519,20 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         tbl = Table(
             "test", meta, Column("id", Integer, primary_key=True), schema="paj"
         )
-        tbl.create(conn)
-        conn.execute(tbl.insert(), {"id": 1})
-        eq_(conn.scalar(tbl.select()), 1)
-        conn.execute(tbl.delete(tbl.c.id == 1))
-        eq_(conn.scalar(tbl.select()), None)
+        tbl.create()
+        tbl.insert().execute({"id": 1})
+        eq_(tbl.select().scalar(), 1)
+        tbl.delete(tbl.c.id == 1).execute()
+        eq_(tbl.select().scalar(), None)
 
     @testing.provide_metadata
-    def test_insertid_reserved(self, connection):
+    def test_insertid_reserved(self):
         meta = self.metadata
         table = Table("select", meta, Column("col", Integer, primary_key=True))
-        table.create(connection)
+        table.create()
 
-        connection.execute(table.insert(), {"col": 7})
-        eq_(connection.scalar(table.select()), 7)
+        table.insert().execute(col=7)
+        eq_(table.select().scalar(), 7)
 
 
 class Foo(object):

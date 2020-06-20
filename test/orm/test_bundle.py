@@ -64,8 +64,8 @@ class BundleTest(fixtures.MappedTest, AssertsCompiledSQL):
         mapper(cls.classes.Other, cls.tables.other)
 
     @classmethod
-    def insert_data(cls, connection):
-        sess = Session(connection)
+    def insert_data(cls):
+        sess = Session()
         sess.add_all(
             [
                 cls.classes.Data(

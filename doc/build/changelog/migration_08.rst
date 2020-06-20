@@ -55,14 +55,15 @@ New ORM Features
 
 .. _feature_relationship_08:
 
-Rewritten :func:`_orm.relationship` mechanics
-----------------------------------------------
+Rewritten :func:`.relationship` mechanics
+-----------------------------------------
+
 0.8 features a much improved and capable system regarding
-how :func:`_orm.relationship` determines how to join between two
+how :func:`.relationship` determines how to join between two
 entities.  The new system includes these features:
 
 * The ``primaryjoin`` argument is **no longer needed** when
-  constructing a :func:`_orm.relationship`   against a class that
+  constructing a :func:`.relationship`   against a class that
   has multiple foreign key paths to the target.  Only the
   ``foreign_keys``   argument is needed to specify those
   columns which should be included:
@@ -157,7 +158,7 @@ entities.  The new system includes these features:
                             remote_side=ip_address
                         )
 
-  The new :func:`_orm.relationship` mechanics make use of a
+  The new :func:`.relationship` mechanics make use of a
   SQLAlchemy concept known as :term:`annotations`.  These annotations
   are also available to application code explicitly via
   the :func:`.foreign` and :func:`.remote` functions, either
@@ -184,7 +185,7 @@ entities.  The new system includes these features:
 
 .. seealso::
 
-    :ref:`relationship_configure_joins` - a newly revised section on :func:`_orm.relationship`
+    :ref:`relationship_configure_joins` - a newly revised section on :func:`.relationship`
     detailing the latest techniques for customizing related attributes and collection
     access.
 
@@ -203,7 +204,7 @@ typically for the purpose of building data-marshalling
 systems, like JSON/XML conversion schemes and of course form
 libraries galore.
 
-Originally, the :class:`_schema.Table` and :class:`_schema.Column` model were the
+Originally, the :class:`.Table` and :class:`.Column` model were the
 original inspection points, which have a well-documented
 system.  While SQLAlchemy ORM models are also fully
 introspectable, this has never been a fully stable and
@@ -214,11 +215,11 @@ how to get at this information.
 documented API for this purpose, including an inspection
 system which works on mapped classes, instances, attributes,
 and other Core and ORM constructs.  The entrypoint to this
-system is the core-level :func:`_sa.inspect` function.
+system is the core-level :func:`.inspect` function.
 In most cases, the object being inspected
 is one already part of SQLAlchemy's system,
-such as :class:`_orm.Mapper`, :class:`.InstanceState`,
-:class:`_reflection.Inspector`.  In some cases, new objects have been
+such as :class:`.Mapper`, :class:`.InstanceState`,
+:class:`.Inspector`.  In some cases, new objects have been
 added with the job of providing the inspection API in
 certain contexts, such as :class:`.AliasedInsp` and
 :class:`.AttributeState`.
@@ -340,7 +341,7 @@ A walkthrough of some key capabilities follows::
 New with_polymorphic() feature, can be used anywhere
 ----------------------------------------------------
 
-The :meth:`_query.Query.with_polymorphic` method allows the user to
+The :meth:`.Query.with_polymorphic` method allows the user to
 specify which tables should be present when querying against
 a joined-table entity.   Unfortunately the method is awkward
 and only applies to the first entity in the list, and
@@ -371,7 +372,7 @@ of_type() works with alias(), with_polymorphic(), any(), has(), joinedload(), su
 
 The :meth:`.PropComparator.of_type` method is used to specify
 a specific subtype to use when constructing SQL expressions along
-a :func:`_orm.relationship` that has a :term:`polymorphic` mapping as its target.
+a :func:`.relationship` that has a :term:`polymorphic` mapping as its target.
 This method can now be used to target *any number* of target subtypes,
 by combining it with the new :func:`.with_polymorphic` function::
 
@@ -383,7 +384,7 @@ by combining it with the new :func:`.with_polymorphic` function::
 
 The method now works equally well in most places a regular relationship
 attribute is accepted, including with loader functions like
-:func:`_orm.joinedload`, :func:`.subqueryload`, :func:`.contains_eager`,
+:func:`.joinedload`, :func:`.subqueryload`, :func:`.contains_eager`,
 and comparison methods like :meth:`.PropComparator.any`
 and :meth:`.PropComparator.has`::
 
@@ -412,7 +413,7 @@ and :meth:`.PropComparator.has`::
 
 .. seealso::
 
-    :ref:`inheritance_of_type`
+    :ref:`of_type`
 
 :ticket:`2438` :ticket:`1106`
 
@@ -508,11 +509,11 @@ in one step:
 ORM Classes Now Accepted by Core Constructs
 -------------------------------------------
 
-While the SQL expressions used with :meth:`_query.Query.filter`,
+While the SQL expressions used with :meth:`.Query.filter`,
 such as ``User.id == 5``, have always been compatible for
-use with core constructs such as :func:`_expression.select`, the mapped
-class itself would not be recognized when passed to :func:`_expression.select`,
-:meth:`_expression.Select.select_from`, or :meth:`_expression.Select.correlate`.
+use with core constructs such as :func:`~.sql.expression.select`, the mapped
+class itself would not be recognized when passed to :func:`~.sql.expression.select`,
+:meth:`.Select.select_from`, or :meth:`.Select.correlate`.
 A new SQL registration system allows a mapped class to be
 accepted as a FROM clause within the core::
 
@@ -521,7 +522,7 @@ accepted as a FROM clause within the core::
     stmt = select([User]).where(User.id == 5)
 
 Above, the mapped ``User`` class will expand into
-the :class:`_schema.Table` to which ``User`` is mapped.
+the :class:`.Table` to which ``User`` is mapped.
 
 :ticket:`2245`
 
@@ -633,7 +634,7 @@ not really a column, CAST operator, or SQL function that
 really drives what kinds of operations are present, it's the
 *type* of the expression.   The implementation details are
 minimal - only a few extra methods are added to the core
-:class:`_expression.ColumnElement` type so that it consults its
+:class:`.ColumnElement` type so that it consults its
 :class:`.TypeEngine` object for an optional set of operators.
 New or revised operations can be associated with any type,
 either via subclassing of an existing type, by using
@@ -689,7 +690,7 @@ as more string, integer and date operators.
 Multiple-VALUES support for Insert
 ----------------------------------
 
-The :meth:`_expression.Insert.values` method now supports a list of dictionaries,
+The :meth:`.Insert.values` method now supports a list of dictionaries,
 which will render a multi-VALUES statement such as
 ``VALUES (<row1>), (<row2>), ...``.  This is only relevant to backends which
 support this syntax, including PostgreSQL, SQLite, and MySQL.  It is
@@ -704,7 +705,7 @@ remains unchanged::
 
 .. seealso::
 
-    :meth:`_expression.Insert.values`
+    :meth:`.Insert.values`
 
 :ticket:`2623`
 
@@ -756,9 +757,9 @@ to embed PostGIS expressions inline in SQL based on type rules.
 Core Inspection System
 ----------------------
 
-The :func:`_sa.inspect` function introduced in :ref:`feature_orminspection_08`
-also applies to the core.  Applied to an :class:`_engine.Engine` it produces
-an :class:`_reflection.Inspector` object::
+The :func:`.inspect` function introduced in :ref:`feature_orminspection_08`
+also applies to the core.  Applied to an :class:`.Engine` it produces
+an :class:`.Inspector` object::
 
     from sqlalchemy import inspect
     from sqlalchemy import create_engine
@@ -767,15 +768,16 @@ an :class:`_reflection.Inspector` object::
     insp = inspect(engine)
     print(insp.get_table_names())
 
-It can also be applied to any :class:`_expression.ClauseElement`, which returns
-the :class:`_expression.ClauseElement` itself, such as :class:`_schema.Table`, :class:`_schema.Column`,
-:class:`_expression.Select`, etc.   This allows it to work fluently between Core
+It can also be applied to any :class:`.ClauseElement`, which returns
+the :class:`.ClauseElement` itself, such as :class:`.Table`, :class:`.Column`,
+:class:`.Select`, etc.   This allows it to work fluently between Core
 and ORM constructs.
 
 
-New Method :meth:`_expression.Select.correlate_except`
--------------------------------------------------------
-:func:`_expression.select` now has a method :meth:`_expression.Select.correlate_except`
+New Method :meth:`.Select.correlate_except`
+-------------------------------------------
+
+:func:`~.sql.expression.select` now has a method :meth:`.Select.correlate_except`
 which specifies "correlate on all FROM clauses except those
 specified".  It can be used for mapping scenarios where
 a related subquery should correlate normally, except
@@ -802,13 +804,13 @@ against a particular target selectable::
 
 .. seealso::
 
-    :meth:`_expression.Select.correlate_except`
+    :meth:`.Select.correlate_except`
 
 PostgreSQL HSTORE type
 ----------------------
 
 Support for PostgreSQL's ``HSTORE`` type is now available as
-:class:`_postgresql.HSTORE`.   This type makes great usage
+:class:`.postgresql.HSTORE`.   This type makes great usage
 of the new operator system to provide a full range of operators
 for HSTORE types, including index access, concatenation,
 and containment methods such as
@@ -834,16 +836,16 @@ and containment methods such as
 
 .. seealso::
 
-    :class:`_postgresql.HSTORE`
+    :class:`.postgresql.HSTORE`
 
-    :class:`_postgresql.hstore`
+    :class:`.postgresql.hstore`
 
 :ticket:`2606`
 
 Enhanced PostgreSQL ARRAY type
 ------------------------------
 
-The :class:`_postgresql.ARRAY` type will accept an optional
+The :class:`.postgresql.ARRAY` type will accept an optional
 "dimension" argument, pinning it to a fixed number of
 dimensions and greatly improving efficiency when retrieving
 results:
@@ -893,9 +895,9 @@ array concatenation, where below, the right side ``[4, 5, 6]`` is coerced into a
 
 .. seealso::
 
-    :class:`_postgresql.ARRAY`
+    :class:`.postgresql.ARRAY`
 
-    :class:`_postgresql.array`
+    :class:`.postgresql.array`
 
 :ticket:`2441`
 
@@ -931,11 +933,11 @@ Huge thanks to Nate Dub for the sprinting on this at Pycon 2012.
 
 .. seealso::
 
-    :class:`_sqlite.DATETIME`
+    :class:`.sqlite.DATETIME`
 
-    :class:`_sqlite.DATE`
+    :class:`.sqlite.DATE`
 
-    :class:`_sqlite.TIME`
+    :class:`.sqlite.TIME`
 
 :ticket:`2363`
 
@@ -944,7 +946,7 @@ Huge thanks to Nate Dub for the sprinting on this at Pycon 2012.
 
 The "collate" keyword, long accepted by the MySQL dialect, is now established
 on all :class:`.String` types and will render on any backend, including
-when features such as :meth:`_schema.MetaData.create_all` and :func:`.cast` is used::
+when features such as :meth:`.MetaData.create_all` and :func:`.cast` is used::
 
     >>> stmt = select([cast(sometable.c.somechar, String(20, collation='utf8'))])
     >>> print(stmt)
@@ -957,8 +959,9 @@ when features such as :meth:`_schema.MetaData.create_all` and :func:`.cast` is u
 
 :ticket:`2276`
 
-"Prefixes" now supported for :func:`_expression.update`, :func:`_expression.delete`
-------------------------------------------------------------------------------------
+"Prefixes" now supported for :func:`.update`, :func:`.delete`
+-------------------------------------------------------------
+
 Geared towards MySQL, a "prefix" can be rendered within any of
 these constructs.   E.g.::
 
@@ -968,19 +971,19 @@ these constructs.   E.g.::
     stmt = table.update().prefix_with("LOW_PRIORITY", dialect="mysql")
 
 The method is new in addition to those which already existed
-on :func:`_expression.insert`, :func:`_expression.select` and :class:`_query.Query`.
+on :func:`~.sql.expression.insert`, :func:`~.sql.expression.select` and :class:`.Query`.
 
 .. seealso::
 
-    :meth:`_expression.Update.prefix_with`
+    :meth:`.Update.prefix_with`
 
-    :meth:`_expression.Delete.prefix_with`
+    :meth:`.Delete.prefix_with`
 
-    :meth:`_expression.Insert.prefix_with`
+    :meth:`.Insert.prefix_with`
 
-    :meth:`_expression.Select.prefix_with`
+    :meth:`.Select.prefix_with`
 
-    :meth:`_query.Query.prefix_with`
+    :meth:`.Query.prefix_with`
 
 :ticket:`2431`
 
@@ -1000,7 +1003,7 @@ such that an object that's "pending", meaning that it's
 associated with a :class:`.Session` but hasn't been inserted into the database
 yet, is automatically expunged from the :class:`.Session` when it becomes an "orphan",
 which means it has been de-associated with a parent object that refers to it
-with ``delete-orphan`` cascade on the configured :func:`_orm.relationship`.   This
+with ``delete-orphan`` cascade on the configured :func:`.relationship`.   This
 behavior is intended to approximately mirror the behavior of a persistent
 (that is, already inserted) object, where the ORM will emit a DELETE for such
 objects that become orphans based on the interception of detachment events.
@@ -1036,7 +1039,7 @@ omission which should be silently skipped - silently skipping the INSERT here wo
 make user errors of this nature very hard to debug.
 
 The old behavior, for applications that might have been relying upon it, can be re-enabled for
-any :class:`_orm.Mapper` by specifying the flag ``legacy_is_orphan`` as a mapper
+any :class:`.Mapper` by specifying the flag ``legacy_is_orphan`` as a mapper
 option.
 
 The new behavior allows the following test case to work::
@@ -1140,7 +1143,7 @@ use cases should use the new "before_attach" event:
 Query now auto-correlates like a select() does
 ----------------------------------------------
 
-Previously it was necessary to call :meth:`_query.Query.correlate` in
+Previously it was necessary to call :meth:`.Query.correlate` in
 order to have a column- or WHERE-subquery correlate to the
 parent:
 
@@ -1175,7 +1178,7 @@ Correlation is now always context-specific
 ------------------------------------------
 
 To allow a wider variety of correlation scenarios, the behavior of
-:meth:`_expression.Select.correlate` and :meth:`_query.Query.correlate` has changed slightly
+:meth:`.Select.correlate` and :meth:`.Query.correlate` has changed slightly
 such that the SELECT statement will omit the "correlated" target from the
 FROM clause only if the statement is actually used in that context.  Additionally,
 it's no longer possible for a SELECT statement that's placed as a FROM
@@ -1227,8 +1230,8 @@ SELECT used in a non-correlating context would see any change.
 create_all() and drop_all() will now honor an empty list as such
 ----------------------------------------------------------------
 
-The methods :meth:`_schema.MetaData.create_all` and :meth:`_schema.MetaData.drop_all`
-will now accept a list of :class:`_schema.Table` objects that is empty,
+The methods :meth:`.MetaData.create_all` and :meth:`.MetaData.drop_all`
+will now accept a list of :class:`.Table` objects that is empty,
 and will not emit any CREATE or DROP statements.  Previously,
 an empty list was interpreted the same as passing ``None``
 for a collection, and CREATE/DROP would be emitted for all
@@ -1294,11 +1297,12 @@ be no pending state change on an unloaded attribute.
 
 :ticket:`2320`
 
-:attr:`_schema.Column.key` is honored in the :attr:`_expression.Select.c` attribute of :func:`_expression.select` with :meth:`_expression.Select.apply_labels`
----------------------------------------------------------------------------------------------------------------------------------------------------------------
-Users of the expression system know that :meth:`_expression.Select.apply_labels`
+:attr:`.Column.key` is honored in the :attr:`.Select.c` attribute of :func:`~.sql.expression.select` with :meth:`.Select.apply_labels`
+-----------------------------------------------------------------------------------------------------------------------
+
+Users of the expression system know that :meth:`.Select.apply_labels`
 prepends the table name to each column name, affecting the
-names that are available from :attr:`_expression.Select.c`:
+names that are available from :attr:`.Select.c`:
 
 ::
 
@@ -1306,9 +1310,9 @@ names that are available from :attr:`_expression.Select.c`:
     s.c.table1_col1
     s.c.table1_col2
 
-Before 0.8, if the :class:`_schema.Column` had a different :attr:`_schema.Column.key`, this
+Before 0.8, if the :class:`.Column` had a different :attr:`.Column.key`, this
 key would be ignored, inconsistently versus when
-:meth:`_expression.Select.apply_labels` were not used:
+:meth:`.Select.apply_labels` were not used:
 
 ::
 
@@ -1324,7 +1328,7 @@ key would be ignored, inconsistently versus when
     s.c.table1_column_one # would raise AttributeError
     s.c.table1_col1 # would be accessible like this
 
-In 0.8, :attr:`_schema.Column.key` is honored in both cases:
+In 0.8, :attr:`.Column.key` is honored in both cases:
 
 ::
 
@@ -1343,16 +1347,16 @@ In 0.8, :attr:`_schema.Column.key` is honored in both cases:
 All other behavior regarding "name" and "key" are the same,
 including that the rendered SQL will still use the form
 ``<tablename>_<colname>`` - the emphasis here was on
-preventing the :attr:`_schema.Column.key` contents from being rendered into the
+preventing the :attr:`.Column.key` contents from being rendered into the
 ``SELECT`` statement so that there are no issues with
-special/ non-ascii characters used in the :attr:`_schema.Column.key`.
+special/ non-ascii characters used in the :attr:`.Column.key`.
 
 :ticket:`2397`
 
 single_parent warning is now an error
 -------------------------------------
 
-A :func:`_orm.relationship` that is many-to-one or many-to-many and
+A :func:`.relationship` that is many-to-one or many-to-many and
 specifies "cascade='all, delete-orphan'", which is an
 awkward but nonetheless supported use case (with
 restrictions) will now raise an error if the relationship

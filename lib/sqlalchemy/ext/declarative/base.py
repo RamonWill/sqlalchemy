@@ -288,7 +288,8 @@ class _MapperConfig(object):
                             "on declarative mixin classes."
                         )
                     elif isinstance(obj, declarative_props):
-                        if obj._cascading:
+                        oldclassprop = isinstance(obj, util.classproperty)
+                        if not oldclassprop and obj._cascading:
                             if name in dict_:
                                 # unfortunately, while we can use the user-
                                 # defined attribute here to allow a clean
@@ -308,6 +309,11 @@ class _MapperConfig(object):
                             ] = ret = obj.__get__(obj, cls)
                             setattr(cls, name, ret)
                         else:
+                            if oldclassprop:
+                                util.warn_deprecated(
+                                    "Use of sqlalchemy.util.classproperty on "
+                                    "declarative classes is deprecated."
+                                )
                             # access attribute using normal class access
                             ret = getattr(cls, name)
 

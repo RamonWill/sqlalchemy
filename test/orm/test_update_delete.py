@@ -1,7 +1,6 @@
 from sqlalchemy import Boolean
 from sqlalchemy import case
 from sqlalchemy import column
-from sqlalchemy import event
 from sqlalchemy import exc
 from sqlalchemy import ForeignKey
 from sqlalchemy import func
@@ -11,8 +10,6 @@ from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import text
-from sqlalchemy import update
-from sqlalchemy.future import select as future_select
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import mapper
@@ -23,6 +20,7 @@ from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 
@@ -57,17 +55,16 @@ class UpdateDeleteTest(fixtures.MappedTest):
             pass
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         users = cls.tables.users
 
-        connection.execute(
-            users.insert(),
+        users.insert().execute(
             [
                 dict(id=1, name="john", age_int=25),
                 dict(id=2, name="jack", age_int=47),
                 dict(id=3, name="jill", age_int=29),
                 dict(id=4, name="jane", age_int=37),
-            ],
+            ]
         )
 
     @classmethod
@@ -168,8 +165,8 @@ class UpdateDeleteTest(fixtures.MappedTest):
         s = Session()
 
         assert_raises_message(
-            exc.ArgumentError,
-            "SET/VALUES column expression or string key expected, got .*Thing",
+            exc.InvalidRequestError,
+            "Invalid expression type: 5",
             s.query(User).update,
             {Thing(): "moonbeam"},
             synchronize_session="evaluate",
@@ -361,58 +358,6 @@ class UpdateDeleteTest(fixtures.MappedTest):
 
         sess.query(User).filter(User.age > 29).update(
             {User.age: User.age - 10}, synchronize_session="evaluate"
-        )
-        eq_([john.age, jack.age, jill.age, jane.age], [25, 27, 29, 27])
-        eq_(
-            sess.query(User.age).order_by(User.id).all(),
-            list(zip([25, 27, 29, 27])),
-        )
-
-        sess.query(User).filter(User.age > 27).update(
-            {users.c.age_int: User.age - 10}, synchronize_session="evaluate"
-        )
-        eq_([john.age, jack.age, jill.age, jane.age], [25, 27, 19, 27])
-        eq_(
-            sess.query(User.age).order_by(User.id).all(),
-            list(zip([25, 27, 19, 27])),
-        )
-
-        sess.query(User).filter(User.age == 25).update(
-            {User.age: User.age - 10}, synchronize_session="fetch"
-        )
-        eq_([john.age, jack.age, jill.age, jane.age], [15, 27, 19, 27])
-        eq_(
-            sess.query(User.age).order_by(User.id).all(),
-            list(zip([15, 27, 19, 27])),
-        )
-
-    def test_update_future(self):
-        User, users = self.classes.User, self.tables.users
-
-        sess = Session()
-
-        john, jack, jill, jane = (
-            sess.execute(future_select(User).order_by(User.id)).scalars().all()
-        )
-
-        sess.execute(
-            update(User)
-            .where(User.age > 29)
-            .values({"age": User.age - 10})
-            .execution_options(synchronize_session="evaluate"),
-        )
-
-        eq_([john.age, jack.age, jill.age, jane.age], [25, 37, 29, 27])
-        eq_(
-            sess.execute(future_select(User.age).order_by(User.id)).all(),
-            list(zip([25, 37, 29, 27])),
-        )
-
-        sess.execute(
-            update(User)
-            .where(User.age > 29)
-            .values({User.age: User.age - 10})
-            .execution_options(synchronize_session="evaluate")
         )
         eq_([john.age, jack.age, jill.age, jane.age], [25, 27, 29, 27])
         eq_(
@@ -730,111 +675,41 @@ class UpdateDeleteTest(fixtures.MappedTest):
 
         # Do an update using unordered dict and check that the parameters used
         # are ordered in table order
-
-        m1 = testing.mock.Mock()
-
-        @event.listens_for(session, "after_bulk_update")
-        def do_orm_execute(bulk_ud):
-            m1(bulk_ud.result.context.compiled.compile_state.statement)
-
         q = session.query(User)
-        q.filter(User.id == 15).update({"name": "foob", "age": 123})
-        assert m1.mock_calls[0][1][0]._values
+        with mock.patch.object(q, "_execute_crud") as exec_:
+            q.filter(User.id == 15).update({"name": "foob", "id": 123})
+            # Confirm that parameters are a dict instead of tuple or list
+            params = exec_.mock_calls[0][1][0]._values
+            assert isinstance(params, dict)
 
-    def test_update_preserve_parameter_order_query(self):
+    def test_update_preserve_parameter_order(self):
         User = self.classes.User
         session = Session()
 
         # Do update using a tuple and check that order is preserved
-
-        m1 = testing.mock.Mock()
-
-        @event.listens_for(session, "after_bulk_update")
-        def do_orm_execute(bulk_ud):
-
-            cols = [
-                c.key
-                for c, v in (
-                    (
-                        bulk_ud.result.context
-                    ).compiled.compile_state.statement._ordered_values
-                )
-            ]
-            m1(cols)
-
         q = session.query(User)
-        q.filter(User.id == 15).update(
-            (("age", 123), ("name", "foob")),
-            update_args={"preserve_parameter_order": True},
-        )
-
-        eq_(m1.mock_calls[0][1][0], ["age_int", "name"])
-
-        m1.mock_calls = []
-
-        q = session.query(User)
-        q.filter(User.id == 15).update(
-            [("name", "foob"), ("age", 123)],
-            update_args={"preserve_parameter_order": True},
-        )
-        eq_(m1.mock_calls[0][1][0], ["name", "age_int"])
-
-    def test_update_multi_values_error_future(self):
-        User = self.classes.User
-        session = Session()
-
-        # Do update using a tuple and check that order is preserved
-
-        stmt = (
-            update(User)
-            .filter(User.id == 15)
-            .values([("id", 123), ("name", "foob")])
-        )
-
-        assert_raises_message(
-            exc.InvalidRequestError,
-            "UPDATE construct does not support multiple parameter sets.",
-            session.execute,
-            stmt,
-        )
-
-    def test_update_preserve_parameter_order_future(self):
-        User = self.classes.User
-        session = Session()
-
-        # Do update using a tuple and check that order is preserved
-
-        stmt = (
-            update(User)
-            .filter(User.id == 15)
-            .ordered_values(("age", 123), ("name", "foob"))
-        )
-        result = session.execute(stmt)
-        cols = [
-            c.key
-            for c, v in (
-                (
-                    result.context
-                ).compiled.compile_state.statement._ordered_values
+        with mock.patch.object(q, "_execute_crud") as exec_:
+            q.filter(User.id == 15).update(
+                (("id", 123), ("name", "foob")),
+                update_args={"preserve_parameter_order": True},
             )
-        ]
-        eq_(["age_int", "name"], cols)
+            cols = [
+                c.key for c, v in exec_.mock_calls[0][1][0]._ordered_values
+            ]
+            eq_(["id", "name"], cols)
 
         # Now invert the order and use a list instead, and check that order is
         # also preserved
-        stmt = (
-            update(User)
-            .filter(User.id == 15)
-            .ordered_values(("name", "foob"), ("age", 123),)
-        )
-        result = session.execute(stmt)
-        cols = [
-            c.key
-            for c, v in (
-                result.context
-            ).compiled.compile_state.statement._ordered_values
-        ]
-        eq_(["name", "age_int"], cols)
+        q = session.query(User)
+        with mock.patch.object(q, "_execute_crud") as exec_:
+            q.filter(User.id == 15).update(
+                [("name", "foob"), ("id", 123)],
+                update_args={"preserve_parameter_order": True},
+            )
+            cols = [
+                c.key for c, v in exec_.mock_calls[0][1][0]._ordered_values
+            ]
+            eq_(["name", "id"], cols)
 
 
 class UpdateDeleteIgnoresLoadersTest(fixtures.MappedTest):
@@ -869,28 +744,26 @@ class UpdateDeleteIgnoresLoadersTest(fixtures.MappedTest):
             pass
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         users = cls.tables.users
 
-        connection.execute(
-            users.insert(),
+        users.insert().execute(
             [
                 dict(id=1, name="john", age=25),
                 dict(id=2, name="jack", age=47),
                 dict(id=3, name="jill", age=29),
                 dict(id=4, name="jane", age=37),
-            ],
+            ]
         )
 
         documents = cls.tables.documents
 
-        connection.execute(
-            documents.insert(),
+        documents.insert().execute(
             [
                 dict(id=1, user_id=1, title="foo"),
                 dict(id=2, user_id=1, title="bar"),
                 dict(id=3, user_id=2, title="baz"),
-            ],
+            ]
         )
 
     @classmethod
@@ -990,17 +863,16 @@ class UpdateDeleteFromTest(fixtures.MappedTest):
             pass
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         users = cls.tables.users
 
-        connection.execute(
-            users.insert(), [dict(id=1), dict(id=2), dict(id=3), dict(id=4)]
+        users.insert().execute(
+            [dict(id=1), dict(id=2), dict(id=3), dict(id=4)]
         )
 
         documents = cls.tables.documents
 
-        connection.execute(
-            documents.insert(),
+        documents.insert().execute(
             [
                 dict(id=1, user_id=1, title="foo"),
                 dict(id=2, user_id=1, title="bar"),
@@ -1008,7 +880,7 @@ class UpdateDeleteFromTest(fixtures.MappedTest):
                 dict(id=4, user_id=2, title="hoho"),
                 dict(id=5, user_id=3, title="lala"),
                 dict(id=6, user_id=3, title="bleh"),
-            ],
+            ]
         )
 
     @classmethod
@@ -1226,23 +1098,16 @@ class ExpressionUpdateTest(fixtures.MappedTest):
 
     def test_update_args(self):
         Data = self.classes.Data
-        session = Session()
+        session = testing.mock.Mock(wraps=Session())
         update_args = {"mysql_limit": 1}
 
-        m1 = testing.mock.Mock()
-
-        @event.listens_for(session, "after_bulk_update")
-        def do_orm_execute(bulk_ud):
-            update_stmt = (
-                bulk_ud.result.context.compiled.compile_state.statement
-            )
-            m1(update_stmt)
-
         q = session.query(Data)
-        q.update({Data.cnt: Data.cnt + 1}, update_args=update_args)
-
-        update_stmt = m1.mock_calls[0][1][0]
-
+        with testing.mock.patch.object(q, "_execute_crud") as exec_:
+            q.update({Data.cnt: Data.cnt + 1}, update_args=update_args)
+        eq_(exec_.call_count, 1)
+        args, kwargs = exec_.mock_calls[0][1:3]
+        eq_(len(args), 2)
+        update_stmt = args[0]
         eq_(update_stmt.dialect_kwargs, update_args)
 
 
@@ -1276,13 +1141,13 @@ class InheritTest(fixtures.DeclarativeMappedTest):
             manager_name = Column(String(50))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Engineer, Person, Manager = (
             cls.classes.Engineer,
             cls.classes.Person,
             cls.classes.Manager,
         )
-        s = Session(connection)
+        s = Session(testing.db)
         s.add_all(
             [
                 Engineer(name="e1", engineer_name="e1"),
@@ -1293,22 +1158,18 @@ class InheritTest(fixtures.DeclarativeMappedTest):
         )
         s.commit()
 
-    @testing.only_on("mysql", "Multi table update")
-    def test_update_from_join_no_problem(self):
+    def test_illegal_metadata(self):
         person = self.classes.Person.__table__
         engineer = self.classes.Engineer.__table__
 
         sess = Session()
-        sess.query(person.join(engineer)).filter(person.c.name == "e2").update(
-            {person.c.name: "updated", engineer.c.engineer_name: "e2a"},
+        assert_raises_message(
+            exc.InvalidRequestError,
+            "This operation requires only one Table or entity be "
+            "specified as the target.",
+            sess.query(person.join(engineer)).update,
+            {},
         )
-        obj = sess.execute(
-            future_select(self.classes.Engineer).filter(
-                self.classes.Engineer.name == "updated"
-            )
-        ).scalar()
-        eq_(obj.name, "updated")
-        eq_(obj.engineer_name, "e2a")
 
     def test_update_subtable_only(self):
         Engineer = self.classes.Engineer

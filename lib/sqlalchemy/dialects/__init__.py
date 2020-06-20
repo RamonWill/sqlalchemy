@@ -18,6 +18,9 @@ __all__ = (
 from .. import util
 
 
+_translates = {"postgres": "postgresql"}
+
+
 def _auto_fn(name):
     """default dialect importer.
 
@@ -31,25 +34,19 @@ def _auto_fn(name):
         dialect = name
         driver = "base"
 
+    if dialect in _translates:
+        translated = _translates[dialect]
+        util.warn_deprecated(
+            "The '%s' dialect name has been "
+            "renamed to '%s'" % (dialect, translated)
+        )
+        dialect = translated
     try:
-        if dialect == "firebird":
-            try:
-                module = __import__("sqlalchemy_firebird")
-            except ImportError:
-                module = __import__("sqlalchemy.dialects.firebird").dialects
-                module = getattr(module, dialect)
-        elif dialect == "sybase":
-            try:
-                module = __import__("sqlalchemy_sybase")
-            except ImportError:
-                module = __import__("sqlalchemy.dialects.sybase").dialects
-                module = getattr(module, dialect)
-        else:
-            module = __import__("sqlalchemy.dialects.%s" % (dialect,)).dialects
-            module = getattr(module, dialect)
+        module = __import__("sqlalchemy.dialects.%s" % (dialect,)).dialects
     except ImportError:
         return None
 
+    module = getattr(module, dialect)
     if hasattr(module, driver):
         module = getattr(module, driver)
         return lambda: module.dialect

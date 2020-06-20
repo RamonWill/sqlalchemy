@@ -82,8 +82,7 @@ class TypeEngine(Traversible):
 
             This method determines the type of a resulting binary expression
             given two source types and an operator.   For example, two
-            :class:`_schema.Column` objects, both of the type
-            :class:`.Integer`, will
+            :class:`.Column` objects, both of the type :class:`.Integer`, will
             produce a :class:`.BinaryExpression` that also has the type
             :class:`.Integer` when compared via the addition (``+``) operator.
             However, using the addition operator with an :class:`.Integer`
@@ -117,8 +116,7 @@ class TypeEngine(Traversible):
 
     comparator_factory = Comparator
     """A :class:`.TypeEngine.Comparator` class which will apply
-    to operations performed by owning :class:`_expression.ColumnElement`
-    objects.
+    to operations performed by owning :class:`.ColumnElement` objects.
 
     The :attr:`.comparator_factory` attribute is a hook consulted by
     the core expression system when column and SQL expression operations
@@ -197,15 +195,14 @@ class TypeEngine(Traversible):
 
         In all cases, the actual NULL SQL value can be always be
         persisted in any column by using
-        the :obj:`_expression.null` SQL construct in an INSERT statement
+        the :obj:`~.expression.null` SQL construct in an INSERT statement
         or associated with an ORM-mapped attribute.
 
         .. note::
 
             The "evaluates none" flag does **not** apply to a value
-            of ``None`` passed to :paramref:`_schema.Column.default` or
-            :paramref:`_schema.Column.server_default`; in these cases,
-            ``None``
+            of ``None`` passed to :paramref:`.Column.default` or
+            :paramref:`.Column.server_default`; in these cases, ``None``
             still means "no default".
 
         .. versionadded:: 1.1
@@ -555,12 +552,7 @@ class TypeEngine(Traversible):
     def _static_cache_key(self):
         names = util.get_cls_kwargs(self.__class__)
         return (self.__class__,) + tuple(
-            (
-                k,
-                self.__dict__[k]._static_cache_key
-                if isinstance(self.__dict__[k], TypeEngine)
-                else self.__dict__[k],
-            )
+            (k, self.__dict__[k])
             for k in names
             if k in self.__dict__ and not k.startswith("_")
         )
@@ -684,7 +676,7 @@ class UserDefinedType(util.with_metaclass(VisitableCheckKWArg, TypeEngine)):
 
     The ``get_col_spec()`` method will in most cases receive a keyword
     argument ``type_expression`` which refers to the owning expression
-    of the type as being compiled, such as a :class:`_schema.Column` or
+    of the type as being compiled, such as a :class:`.Column` or
     :func:`.cast` construct.  This keyword is only sent if the method
     accepts keyword arguments (e.g. ``**kw``) in its argument signature;
     introspection is used to check for this in order to support legacy
@@ -699,6 +691,25 @@ class UserDefinedType(util.with_metaclass(VisitableCheckKWArg, TypeEngine)):
     __visit_name__ = "user_defined"
 
     ensure_kwarg = "get_col_spec"
+
+    class Comparator(TypeEngine.Comparator):
+        __slots__ = ()
+
+        def _adapt_expression(self, op, other_comparator):
+            if hasattr(self.type, "adapt_operator"):
+                util.warn_deprecated(
+                    "UserDefinedType.adapt_operator is deprecated.  Create "
+                    "a UserDefinedType.Comparator subclass instead which "
+                    "generates the desired expression constructs, given a "
+                    "particular operator."
+                )
+                return self.type.adapt_operator(op), self.type
+            else:
+                return super(
+                    UserDefinedType.Comparator, self
+                )._adapt_expression(op, other_comparator)
+
+    comparator_factory = Comparator
 
     def coerce_compared_value(self, op, value):
         """Suggest a type for a 'coerced' Python value in an expression.
@@ -867,7 +878,7 @@ class TypeDecorator(SchemaEventTarget, TypeEngine):
        If the :class:`.TypeDecorator` is augmenting a
        type that requires special logic for certain types of operators,
        this method **must** be overridden.  A key example is when decorating
-       the :class:`_postgresql.JSON` and :class:`_postgresql.JSONB` types;
+       the :class:`.postgresql.JSON` and :class:`.postgresql.JSONB` types;
        the default rules of :meth:`.TypeEngine.coerce_compared_value` should
        be used in order to deal with operators like index operations::
 

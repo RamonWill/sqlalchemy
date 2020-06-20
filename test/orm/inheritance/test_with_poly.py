@@ -1,5 +1,4 @@
 from sqlalchemy import and_
-from sqlalchemy import exc
 from sqlalchemy import or_
 from sqlalchemy import testing
 from sqlalchemy.orm import create_session
@@ -15,24 +14,6 @@ from ._poly_fixtures import Boss
 from ._poly_fixtures import Engineer
 from ._poly_fixtures import Manager
 from ._poly_fixtures import Person
-
-
-class WithPolymorphicAPITest(_Polymorphic, _PolymorphicFixtureBase):
-    def test_no_use_flat_and_aliased(self):
-        sess = create_session()
-
-        subq = sess.query(Person).subquery()
-
-        testing.assert_raises_message(
-            exc.ArgumentError,
-            "the 'flat' and 'selectable' arguments cannot be passed "
-            "simultaneously to with_polymorphic()",
-            with_polymorphic,
-            Person,
-            [Engineer],
-            selectable=subq,
-            flat=True,
-        )
 
 
 class _WithPolymorphicBase(_PolymorphicFixtureBase):

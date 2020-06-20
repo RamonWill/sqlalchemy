@@ -113,17 +113,11 @@ class DefaultColumnComparatorTest(fixtures.TestBase):
     def test_operate(self, operator, right):
         left = column("left")
 
-        if operators.is_comparison(operator):
-            type_ = sqltypes.BOOLEANTYPE
-        else:
-            type_ = sqltypes.NULLTYPE
-
         assert left.comparator.operate(operator, right).compare(
             BinaryExpression(
                 coercions.expect(roles.WhereHavingRole, left),
                 coercions.expect(roles.WhereHavingRole, right),
                 operator,
-                type_=type_,
             )
         )
 
@@ -135,7 +129,6 @@ class DefaultColumnComparatorTest(fixtures.TestBase):
                 coercions.expect(roles.WhereHavingRole, right),
                 operator,
                 modifiers=modifiers,
-                type_=type_,
             )
         )
 
@@ -174,7 +167,6 @@ class DefaultColumnComparatorTest(fixtures.TestBase):
                     "left", value=[1, 2, 3], unique=True, expanding=True
                 ),
                 operators.in_op,
-                type_=sqltypes.BOOLEANTYPE,
             )
         )
         self._loop_test(operators.in_op, [1, 2, 3])
@@ -188,7 +180,6 @@ class DefaultColumnComparatorTest(fixtures.TestBase):
                     "left", value=[1, 2, 3], unique=True, expanding=True
                 ),
                 operators.notin_op,
-                type_=sqltypes.BOOLEANTYPE,
             )
         )
         self._loop_test(operators.notin_op, [1, 2, 3])
@@ -2804,131 +2795,6 @@ class TupleTypingTest(fixtures.TestBase):
 
         eq_(len(expr.right.value), 2)
         self._assert_types(expr.right._expanding_in_types)
-
-
-class InSelectableTest(fixtures.TestBase, testing.AssertsCompiledSQL):
-    __dialect__ = "default"
-
-    def test_in_select(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x])
-
-        self.assert_compile(column("q").in_(stmt), "q IN (SELECT t.x FROM t)")
-
-    def test_in_subquery_warning(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).subquery()
-
-        with expect_warnings(
-            r"Coercing Subquery object into a select\(\) for use in "
-            r"IN\(\); please pass a select\(\) construct explicitly",
-        ):
-            self.assert_compile(
-                column("q").in_(stmt),
-                "q IN (SELECT anon_1.x FROM "
-                "(SELECT t.x AS x FROM t) AS anon_1)",
-            )
-
-    def test_in_subquery_explicit(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).subquery()
-
-        self.assert_compile(
-            column("q").in_(stmt.select()),
-            "q IN (SELECT anon_1.x FROM "
-            "(SELECT t.x AS x FROM t) AS anon_1)",
-        )
-
-    def test_in_subquery_alias_implicit(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).subquery().alias()
-
-        with expect_warnings(
-            r"Coercing Alias object into a select\(\) for use in "
-            r"IN\(\); please pass a select\(\) construct explicitly",
-        ):
-            self.assert_compile(
-                column("q").in_(stmt),
-                "q IN (SELECT anon_1.x FROM (SELECT t.x AS x FROM t) "
-                "AS anon_1)",
-            )
-
-    def test_in_subquery_alias_explicit(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).subquery().alias()
-
-        self.assert_compile(
-            column("q").in_(stmt.select().scalar_subquery()),
-            "q IN (SELECT anon_1.x FROM (SELECT t.x AS x FROM t) AS anon_1)",
-        )
-
-    def test_in_table(self):
-        t = table("t", column("x"))
-
-        with expect_warnings(
-            r"Coercing TableClause object into a select\(\) for use in "
-            r"IN\(\); please pass a select\(\) construct explicitly",
-        ):
-            self.assert_compile(column("q").in_(t), "q IN (SELECT t.x FROM t)")
-
-    def test_in_table_alias(self):
-        t = table("t", column("x"))
-
-        with expect_warnings(
-            r"Coercing Alias object into a select\(\) for use in "
-            r"IN\(\); please pass a select\(\) construct explicitly",
-        ):
-            self.assert_compile(
-                column("q").in_(t.alias()), "q IN (SELECT t_1.x FROM t AS t_1)"
-            )
-
-    def test_in_cte_implicit(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).cte()
-
-        with expect_warnings(
-            r"Coercing CTE object into a select\(\) for use in "
-            r"IN\(\); please pass a select\(\) construct explicitly",
-        ):
-            s2 = select([column("q").in_(stmt)])
-
-        self.assert_compile(
-            s2,
-            "WITH anon_2 AS (SELECT t.x AS x FROM t) "
-            "SELECT q IN (SELECT anon_2.x FROM anon_2) AS anon_1",
-        )
-
-    def test_in_cte_explicit(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).cte()
-
-        s2 = select([column("q").in_(stmt.select().scalar_subquery())])
-
-        self.assert_compile(
-            s2,
-            "WITH anon_2 AS (SELECT t.x AS x FROM t) "
-            "SELECT q IN (SELECT anon_2.x FROM anon_2) AS anon_1",
-        )
-
-    def test_in_cte_select(self):
-        t = table("t", column("x"))
-
-        stmt = select([t.c.x]).cte()
-
-        s2 = select([column("q").in_(stmt.select())])
-
-        self.assert_compile(
-            s2,
-            "WITH anon_2 AS (SELECT t.x AS x FROM t) "
-            "SELECT q IN (SELECT anon_2.x FROM anon_2) AS anon_1",
-        )
 
 
 class AnyAllTest(fixtures.TestBase, testing.AssertsCompiledSQL):

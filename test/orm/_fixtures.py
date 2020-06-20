@@ -153,6 +153,7 @@ class FixtureTest(fixtures.MappedTest):
             },
         )
         mapper(Keyword, keywords)
+
         mapper(
             Node,
             nodes,

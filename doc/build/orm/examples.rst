@@ -90,8 +90,6 @@ XML Persistence
 
 .. automodule:: examples.elementtree
 
-.. _examples_versioning:
-
 Versioning Objects
 ------------------
 

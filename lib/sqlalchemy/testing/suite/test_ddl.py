@@ -45,7 +45,6 @@ class TableDDLTest(fixtures.TestBase):
         self._simple_roundtrip(table)
 
     @requirements.create_table
-    @requirements.schemas
     @util.provide_metadata
     def test_create_table_schema(self):
         table = self._simple_fixture(schema=config.test_schema)
@@ -68,31 +67,25 @@ class TableDDLTest(fixtures.TestBase):
 
     @requirements.comment_reflection
     @util.provide_metadata
-    def test_add_table_comment(self, connection):
+    def test_add_table_comment(self):
         table = self._simple_fixture()
-        table.create(connection, checkfirst=False)
+        table.create(config.db, checkfirst=False)
         table.comment = "a comment"
-        connection.execute(schema.SetTableComment(table))
+        config.db.execute(schema.SetTableComment(table))
         eq_(
-            inspect(connection).get_table_comment("test_table"),
+            inspect(config.db).get_table_comment("test_table"),
             {"text": "a comment"},
         )
 
     @requirements.comment_reflection
     @util.provide_metadata
-    def test_drop_table_comment(self, connection):
+    def test_drop_table_comment(self):
         table = self._simple_fixture()
-        table.create(connection, checkfirst=False)
+        table.create(config.db, checkfirst=False)
         table.comment = "a comment"
-        connection.execute(schema.SetTableComment(table))
-        connection.execute(schema.DropTableComment(table))
-        eq_(
-            inspect(connection).get_table_comment("test_table"), {"text": None}
-        )
+        config.db.execute(schema.SetTableComment(table))
+        config.db.execute(schema.DropTableComment(table))
+        eq_(inspect(config.db).get_table_comment("test_table"), {"text": None})
 
 
-class FutureTableDDLTest(fixtures.FutureEngineMixin, TableDDLTest):
-    pass
-
-
-__all__ = ("TableDDLTest", "FutureTableDDLTest")
+__all__ = ("TableDDLTest",)

@@ -18,29 +18,13 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.testing import config
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import profiling
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 
 
-class NoCache(object):
-    run_setup_bind = "each"
-
-    @classmethod
-    def setup_class(cls):
-        super(NoCache, cls).setup_class()
-        cls._cache = config.db._compiled_cache
-        config.db._compiled_cache = None
-
-    @classmethod
-    def teardown_class(cls):
-        config.db._compiled_cache = cls._cache
-        super(NoCache, cls).teardown_class()
-
-
-class MergeTest(NoCache, fixtures.MappedTest):
+class MergeTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -90,13 +74,11 @@ class MergeTest(NoCache, fixtures.MappedTest):
         mapper(Child, child)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         parent, child = cls.tables.parent, cls.tables.child
 
-        connection.execute(parent.insert(), {"id": 1, "data": "p1"})
-        connection.execute(
-            child.insert(), {"id": 1, "data": "p1c1", "parent_id": 1}
-        )
+        parent.insert().execute({"id": 1, "data": "p1"})
+        child.insert().execute({"id": 1, "data": "p1c1", "parent_id": 1})
 
     def test_merge_no_load(self):
         Parent = self.classes.Parent
@@ -156,7 +138,7 @@ class MergeTest(NoCache, fixtures.MappedTest):
         self.assert_sql_count(testing.db, go2, 2)
 
 
-class LoadManyToOneFromIdentityTest(NoCache, fixtures.MappedTest):
+class LoadManyToOneFromIdentityTest(fixtures.MappedTest):
 
     """test overhead associated with many-to-one fetches.
 
@@ -207,15 +189,13 @@ class LoadManyToOneFromIdentityTest(NoCache, fixtures.MappedTest):
         mapper(Child, child)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         parent, child = cls.tables.parent, cls.tables.child
 
-        connection.execute(
-            child.insert(),
-            [{"id": i, "data": "c%d" % i} for i in range(1, 251)],
+        child.insert().execute(
+            [{"id": i, "data": "c%d" % i} for i in range(1, 251)]
         )
-        connection.execute(
-            parent.insert(),
+        parent.insert().execute(
             [
                 {
                     "id": i,
@@ -223,7 +203,7 @@ class LoadManyToOneFromIdentityTest(NoCache, fixtures.MappedTest):
                     "child_id": (i % 250) + 1,
                 }
                 for i in range(1, 1000)
-            ],
+            ]
         )
 
     def test_many_to_one_load_no_identity(self):
@@ -255,7 +235,7 @@ class LoadManyToOneFromIdentityTest(NoCache, fixtures.MappedTest):
         go()
 
 
-class MergeBackrefsTest(NoCache, fixtures.MappedTest):
+class MergeBackrefsTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -312,9 +292,9 @@ class MergeBackrefsTest(NoCache, fixtures.MappedTest):
         mapper(D, d)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B, C, D = cls.classes.A, cls.classes.B, cls.classes.C, cls.classes.D
-        s = Session(connection)
+        s = Session()
         s.add_all(
             [
                 A(
@@ -349,7 +329,7 @@ class MergeBackrefsTest(NoCache, fixtures.MappedTest):
             s.merge(a)
 
 
-class DeferOptionsTest(NoCache, fixtures.MappedTest):
+class DeferOptionsTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -378,9 +358,9 @@ class DeferOptionsTest(NoCache, fixtures.MappedTest):
         mapper(A, a)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A = cls.classes.A
-        s = Session(connection)
+        s = Session()
         s.add_all(
             [
                 A(
@@ -413,7 +393,7 @@ class DeferOptionsTest(NoCache, fixtures.MappedTest):
         ).all()
 
 
-class AttributeOverheadTest(NoCache, fixtures.MappedTest):
+class AttributeOverheadTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -492,7 +472,7 @@ class AttributeOverheadTest(NoCache, fixtures.MappedTest):
         go()
 
 
-class SessionTest(NoCache, fixtures.MappedTest):
+class SessionTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -558,7 +538,7 @@ class SessionTest(NoCache, fixtures.MappedTest):
         go()
 
 
-class QueryTest(NoCache, fixtures.MappedTest):
+class QueryTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -620,7 +600,7 @@ class QueryTest(NoCache, fixtures.MappedTest):
         go()
 
 
-class SelectInEagerLoadTest(NoCache, fixtures.MappedTest):
+class SelectInEagerLoadTest(fixtures.MappedTest):
     """basic test for selectin() loading, which uses a baked query.
 
     if the baked query starts spoiling due to some bug in cache keys,
@@ -684,9 +664,9 @@ class SelectInEagerLoadTest(NoCache, fixtures.MappedTest):
         mapper(C, c)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B, C = cls.classes("A", "B", "C")
-        s = Session(connection)
+        s = Session()
         s.add(A(bs=[B(cs=[C()]), B(cs=[C()])]))
         s.commit()
 
@@ -696,10 +676,6 @@ class SelectInEagerLoadTest(NoCache, fixtures.MappedTest):
         sess = Session()
 
         q = sess.query(A).options(selectinload(A.bs).selectinload(B.cs))
-
-        # note this value went up when we removed query._attributes;
-        # this is because the test was previously making use of the same
-        # loader option state repeatedly without rebuilding it.
 
         @profiling.function_call_count()
         def go():
@@ -711,7 +687,7 @@ class SelectInEagerLoadTest(NoCache, fixtures.MappedTest):
         go()
 
 
-class JoinedEagerLoadTest(NoCache, fixtures.MappedTest):
+class JoinedEagerLoadTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -819,9 +795,9 @@ class JoinedEagerLoadTest(NoCache, fixtures.MappedTest):
         mapper(G, g)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B, C, D, E, F, G = cls.classes("A", "B", "C", "D", "E", "F", "G")
-        s = Session(connection)
+        s = Session()
         s.add(
             A(
                 bs=[B(cs=[C(ds=[D()])]), B(cs=[C()])],
@@ -850,7 +826,7 @@ class JoinedEagerLoadTest(NoCache, fixtures.MappedTest):
     def test_fetch_results(self):
         A, B, C, D, E, F, G = self.classes("A", "B", "C", "D", "E", "F", "G")
 
-        sess = Session(testing.db)
+        sess = Session()
 
         q = sess.query(A).options(
             joinedload(A.bs).joinedload(B.cs).joinedload(C.ds),
@@ -858,45 +834,19 @@ class JoinedEagerLoadTest(NoCache, fixtures.MappedTest):
             defaultload(A.es).joinedload(E.gs),
         )
 
-        compile_state = q._compile_state()
-
-        from sqlalchemy.orm.context import ORMCompileState
+        context = q._compile_context()
 
         @profiling.function_call_count()
         def go():
             for i in range(100):
-                # NOTE: this test was broken in
-                # 77f1b7d236dba6b1c859bb428ef32d118ec372e6 because we started
-                # clearing out the attributes after the first iteration.   make
-                # sure the attributes are there every time.
-                assert compile_state.attributes
-                exec_opts = {}
-                bind_arguments = {}
-                ORMCompileState.orm_pre_session_exec(
-                    sess,
-                    compile_state.select_statement,
-                    {},
-                    exec_opts,
-                    bind_arguments,
-                )
-
-                r = sess.connection().execute(
-                    compile_state.statement,
-                    execution_options=exec_opts,
-                    bind_arguments=bind_arguments,
-                )
-
-                r.context.compiled.compile_state = compile_state
-                obj = ORMCompileState.orm_setup_cursor_result(
-                    sess, compile_state.statement, exec_opts, {}, r
-                )
+                obj = q._execute_and_instances(context)
                 list(obj)
                 sess.close()
 
         go()
 
 
-class JoinConditionTest(NoCache, fixtures.DeclarativeMappedTest):
+class JoinConditionTest(fixtures.DeclarativeMappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -985,7 +935,7 @@ class JoinConditionTest(NoCache, fixtures.DeclarativeMappedTest):
         go()
 
 
-class BranchedOptionTest(NoCache, fixtures.MappedTest):
+class BranchedOptionTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -1156,17 +1106,9 @@ class BranchedOptionTest(NoCache, fixtures.MappedTest):
 
         q = Session().query(A)
 
-        context = q._compile_state()
-
         @profiling.function_call_count(warmup=1)
         def go():
-            q2 = q.options(opts)
-            context.query = q2
-            context.attributes = q2._attributes = {
-                "_unbound_load_dedupes": set()
-            }
-            for opt in q2._with_options:
-                opt.process_compile_state(context)
+            q.options(*opts)
 
         go()
 
@@ -1183,22 +1125,14 @@ class BranchedOptionTest(NoCache, fixtures.MappedTest):
 
         q = Session().query(A)
 
-        context = q._compile_state()
-
         @profiling.function_call_count(warmup=1)
         def go():
-            q2 = q.options(opts)
-            context.query = q2
-            context.attributes = q2._attributes = {
-                "_unbound_load_dedupes": set()
-            }
-            for opt in q2._with_options:
-                opt.process_compile_state(context)
+            q.options(*opts)
 
         go()
 
 
-class AnnotatedOverheadTest(NoCache, fixtures.MappedTest):
+class AnnotatedOverheadTest(fixtures.MappedTest):
     __requires__ = ("python_profiling_backend",)
 
     @classmethod
@@ -1225,9 +1159,9 @@ class AnnotatedOverheadTest(NoCache, fixtures.MappedTest):
         mapper(A, a)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A = cls.classes.A
-        s = Session(connection)
+        s = Session()
         s.add_all([A(data="asdf") for i in range(5)])
         s.commit()
 

@@ -43,11 +43,6 @@ ext_modules = [
         extra_compile_args=extra_compile_args,
     ),
     Extension(
-        "sqlalchemy.cimmutabledict",
-        sources=["lib/sqlalchemy/cextension/immutabledict.c"],
-        extra_compile_args=extra_compile_args,
-    ),
-    Extension(
         "sqlalchemy.cutils",
         sources=["lib/sqlalchemy/cextension/utils.c"],
         extra_compile_args=extra_compile_args,

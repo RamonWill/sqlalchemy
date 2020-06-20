@@ -1688,8 +1688,6 @@ class ResetOnReturnTest(PoolTestBase):
             def __init__(self, conn):
                 self.conn = conn
 
-            is_active = True
-
             def rollback(self):
                 self.conn.special_rollback()
 
@@ -1720,8 +1718,6 @@ class ResetOnReturnTest(PoolTestBase):
         class Agent(object):
             def __init__(self, conn):
                 self.conn = conn
-
-            is_active = True
 
             def rollback(self):
                 self.conn.special_rollback()

@@ -5,7 +5,6 @@
 /build/
 /dist/
 /doc/build/output/
-/doc/build/_build/
 /dogpile_data/
 *.orig
 *,cover

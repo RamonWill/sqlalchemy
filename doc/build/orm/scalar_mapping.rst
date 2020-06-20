@@ -1,4 +1,4 @@
-.. currentmodule:: sqlalchemy.orm
+.. module:: sqlalchemy.orm
 
 ===============================
 Mapping Columns and Expressions

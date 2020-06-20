@@ -19,7 +19,7 @@ not provide out of the box functionality for translating values between Python
 `datetime` objects and a SQLite-supported format. SQLAlchemy's own
 :class:`~sqlalchemy.types.DateTime` and related types provide date formatting
 and parsing functionality when SQLite is used. The implementation classes are
-:class:`_sqlite.DATETIME`, :class:`_sqlite.DATE` and :class:`_sqlite.TIME`.
+:class:`~.sqlite.DATETIME`, :class:`~.sqlite.DATE` and :class:`~.sqlite.TIME`.
 These types represent dates and times as ISO formatted strings, which also
 nicely support ordering. There's no reliance on typical "libc" internals for
 these functions so historical dates are fully supported.
@@ -179,8 +179,7 @@ default mode of ``SERIALIZABLE`` isolation, and a "dirty read" isolation
 mode normally referred to as ``READ UNCOMMITTED``.
 
 SQLAlchemy ties into this PRAGMA statement using the
-:paramref:`_sa.create_engine.isolation_level` parameter of
-:func:`_sa.create_engine`.
+:paramref:`.create_engine.isolation_level` parameter of :func:`.create_engine`.
 Valid values for this parameter when used with SQLite are ``"SERIALIZABLE"``
 and ``"READ UNCOMMITTED"`` corresponding to a value of 0 and 1, respectively.
 SQLite defaults to ``SERIALIZABLE``, however its behavior is impacted by
@@ -217,7 +216,7 @@ SAVEPOINT Support
 
 SQLite supports SAVEPOINTs, which only function once a transaction is
 begun.   SQLAlchemy's SAVEPOINT support is available using the
-:meth:`_engine.Connection.begin_nested` method at the Core level, and
+:meth:`.Connection.begin_nested` method at the Core level, and
 :meth:`.Session.begin_nested` at the ORM level.   However, SAVEPOINTs
 won't work at all with pysqlite unless workarounds are taken.
 
@@ -304,12 +303,11 @@ itself depending on the location of the target constraint.    To render this
 clause within DDL, the extension parameter ``sqlite_on_conflict`` can be
 specified with a string conflict resolution algorithm within the
 :class:`.PrimaryKeyConstraint`, :class:`.UniqueConstraint`,
-:class:`.CheckConstraint` objects.  Within the :class:`_schema.Column` object,
-there
+:class:`.CheckConstraint` objects.  Within the :class:`.Column` object, there
 are individual parameters ``sqlite_on_conflict_not_null``,
 ``sqlite_on_conflict_primary_key``, ``sqlite_on_conflict_unique`` which each
 correspond to the three types of relevant constraint types that can be
-indicated from a :class:`_schema.Column` object.
+indicated from a :class:`.Column` object.
 
 .. seealso::
 
@@ -341,10 +339,9 @@ The above renders CREATE TABLE DDL as::
     )
 
 
-When using the :paramref:`_schema.Column.unique`
-flag to add a UNIQUE constraint
+When using the :paramref:`.Column.unique` flag to add a UNIQUE constraint
 to a single column, the ``sqlite_on_conflict_unique`` parameter can
-be added to the :class:`_schema.Column` as well, which will be added to the
+be added to the :class:`.Column` as well, which will be added to the
 UNIQUE constraint in the DDL::
 
     some_table = Table(
@@ -420,30 +417,30 @@ http://www.sqlite.org/datatype3.html section 2.1.
 The provided typemap will make direct associations from an exact string
 name match for the following types:
 
-:class:`_types.BIGINT`, :class:`_types.BLOB`,
-:class:`_types.BOOLEAN`, :class:`_types.BOOLEAN`,
-:class:`_types.CHAR`, :class:`_types.DATE`,
-:class:`_types.DATETIME`, :class:`_types.FLOAT`,
-:class:`_types.DECIMAL`, :class:`_types.FLOAT`,
-:class:`_types.INTEGER`, :class:`_types.INTEGER`,
-:class:`_types.NUMERIC`, :class:`_types.REAL`,
-:class:`_types.SMALLINT`, :class:`_types.TEXT`,
-:class:`_types.TIME`, :class:`_types.TIMESTAMP`,
-:class:`_types.VARCHAR`, :class:`_types.NVARCHAR`,
-:class:`_types.NCHAR`
+:class:`~.types.BIGINT`, :class:`~.types.BLOB`,
+:class:`~.types.BOOLEAN`, :class:`~.types.BOOLEAN`,
+:class:`~.types.CHAR`, :class:`~.types.DATE`,
+:class:`~.types.DATETIME`, :class:`~.types.FLOAT`,
+:class:`~.types.DECIMAL`, :class:`~.types.FLOAT`,
+:class:`~.types.INTEGER`, :class:`~.types.INTEGER`,
+:class:`~.types.NUMERIC`, :class:`~.types.REAL`,
+:class:`~.types.SMALLINT`, :class:`~.types.TEXT`,
+:class:`~.types.TIME`, :class:`~.types.TIMESTAMP`,
+:class:`~.types.VARCHAR`, :class:`~.types.NVARCHAR`,
+:class:`~.types.NCHAR`
 
 When a type name does not match one of the above types, the "type affinity"
 lookup is used instead:
 
-* :class:`_types.INTEGER` is returned if the type name includes the
+* :class:`~.types.INTEGER` is returned if the type name includes the
   string ``INT``
-* :class:`_types.TEXT` is returned if the type name includes the
+* :class:`~.types.TEXT` is returned if the type name includes the
   string ``CHAR``, ``CLOB`` or ``TEXT``
-* :class:`_types.NullType` is returned if the type name includes the
+* :class:`~.types.NullType` is returned if the type name includes the
   string ``BLOB``
-* :class:`_types.REAL` is returned if the type name includes the string
+* :class:`~.types.REAL` is returned if the type name includes the string
   ``REAL``, ``FLOA`` or ``DOUB``.
-* Otherwise, the :class:`_types.NUMERIC` type is used.
+* Otherwise, the :class:`~.types.NUMERIC` type is used.
 
 .. versionadded:: 0.9.3 Support for SQLite type affinity rules when reflecting
    columns.
@@ -558,12 +555,12 @@ names are still addressable*::
     1
 
 Therefore, the workaround applied by SQLAlchemy only impacts
-:meth:`_engine.CursorResult.keys` and :meth:`.Row.keys()` in the public API. In
+:meth:`.ResultProxy.keys` and :meth:`.Row.keys()` in the public API. In
 the very specific case where an application is forced to use column names that
-contain dots, and the functionality of :meth:`_engine.CursorResult.keys` and
+contain dots, and the functionality of :meth:`.ResultProxy.keys` and
 :meth:`.Row.keys()` is required to return these dotted names unmodified,
 the ``sqlite_raw_colnames`` execution option may be provided, either on a
-per-:class:`_engine.Connection` basis::
+per-:class:`.Connection` basis::
 
     result = conn.execution_options(sqlite_raw_colnames=True).exec_driver_sql('''
         select x.a, x.b from x where a=1
@@ -572,11 +569,11 @@ per-:class:`_engine.Connection` basis::
     ''')
     assert result.keys() == ["x.a", "x.b"]
 
-or on a per-:class:`_engine.Engine` basis::
+or on a per-:class:`.Engine` basis::
 
     engine = create_engine("sqlite://", execution_options={"sqlite_raw_colnames": True})
 
-When using the per-:class:`_engine.Engine` execution option, note that
+When using the per-:class:`.Engine` execution option, note that
 **Core and ORM queries that use UNION may not function properly**.
 
 """  # noqa
@@ -1076,6 +1073,8 @@ class SQLiteCompiler(compiler.SQLCompiler):
 
 class SQLiteDDLCompiler(compiler.DDLCompiler):
     def get_column_specification(self, column, **kwargs):
+        if column.computed is not None:
+            raise exc.CompileError("SQLite does not support computed columns")
 
         coltype = self.dialect.type_compiler.process(
             column.type, type_expression=column
@@ -1121,9 +1120,6 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
                     colspec += " ON CONFLICT " + on_conflict_clause
 
                 colspec += " AUTOINCREMENT"
-
-        if column.computed is not None:
-            colspec += " " + self.process(column.computed)
 
         return colspec
 
@@ -1334,7 +1330,6 @@ class SQLiteIdentifierPreparer(compiler.IdentifierPreparer):
             "escape",
             "except",
             "exclusive",
-            "exists",
             "explain",
             "false",
             "fail",
@@ -1454,6 +1449,9 @@ class SQLiteDialect(default.DefaultDialect):
     ischema_names = ischema_names
     colspecs = colspecs
     isolation_level = None
+
+    supports_cast = True
+    supports_default_values = True
 
     construct_arguments = [
         (sa_schema.Table, {"autoincrement": False}),
@@ -1692,75 +1690,34 @@ class SQLiteDialect(default.DefaultDialect):
 
     @reflection.cache
     def get_columns(self, connection, table_name, schema=None, **kw):
-        pragma = "table_info"
-        # computed columns are threaded as hidden, they require table_xinfo
-        if self.server_version_info >= (3, 31):
-            pragma = "table_xinfo"
         info = self._get_table_pragma(
-            connection, pragma, table_name, schema=schema
+            connection, "table_info", table_name, schema=schema
         )
+
         columns = []
-        tablesql = None
         for row in info:
-            name = row[1]
-            type_ = row[2].upper()
-            nullable = not row[3]
-            default = row[4]
-            primary_key = row[5]
-            hidden = row[6] if pragma == "table_xinfo" else 0
-
-            # hidden has value 0 for normal columns, 1 for hidden columns,
-            # 2 for computed virtual columns and 3 for computed stored columns
-            # https://www.sqlite.org/src/info/069351b85f9a706f60d3e98fbc8aaf40c374356b967c0464aede30ead3d9d18b
-            if hidden == 1:
-                continue
-
-            generated = bool(hidden)
-            persisted = hidden == 3
-
-            if tablesql is None and generated:
-                tablesql = self._get_table_sql(
-                    connection, table_name, schema, **kw
-                )
+            (name, type_, nullable, default, primary_key) = (
+                row[1],
+                row[2].upper(),
+                not row[3],
+                row[4],
+                row[5],
+            )
 
             columns.append(
                 self._get_column_info(
-                    name,
-                    type_,
-                    nullable,
-                    default,
-                    primary_key,
-                    generated,
-                    persisted,
-                    tablesql,
+                    name, type_, nullable, default, primary_key
                 )
             )
         return columns
 
-    def _get_column_info(
-        self,
-        name,
-        type_,
-        nullable,
-        default,
-        primary_key,
-        generated,
-        persisted,
-        tablesql,
-    ):
-
-        if generated:
-            # the type of a column "cc INTEGER GENERATED ALWAYS AS (1 + 42)"
-            # somehow is "INTEGER GENERATED ALWAYS"
-            type_ = re.sub("generated", "", type_, flags=re.IGNORECASE)
-            type_ = re.sub("always", "", type_, flags=re.IGNORECASE).strip()
-
+    def _get_column_info(self, name, type_, nullable, default, primary_key):
         coltype = self._resolve_type_affinity(type_)
 
         if default is not None:
             default = util.text_type(default)
 
-        colspec = {
+        return {
             "name": name,
             "type": coltype,
             "nullable": nullable,
@@ -1768,17 +1725,6 @@ class SQLiteDialect(default.DefaultDialect):
             "autoincrement": "auto",
             "primary_key": primary_key,
         }
-        if generated:
-            sqltext = ""
-            if tablesql:
-                pattern = r"[^,]*\s+AS\s+\(([^,]*)\)\s*(?:virtual|stored)?"
-                match = re.search(
-                    re.escape(name) + pattern, tablesql, re.IGNORECASE
-                )
-                if match:
-                    sqltext = match.group(1)
-            colspec["computed"] = {"sqltext": sqltext, "persisted": persisted}
-        return colspec
 
     def _resolve_type_affinity(self, type_):
         """Return a data type from a reflected column, using affinity tules.

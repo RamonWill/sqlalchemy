@@ -1,4 +1,4 @@
-.. currentmodule:: sqlalchemy.orm
+.. module:: sqlalchemy.orm
 
 .. _relationship_config_toplevel:
 

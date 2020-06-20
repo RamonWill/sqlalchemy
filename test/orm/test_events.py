@@ -653,9 +653,9 @@ class RestoreLoadContextTest(fixtures.DeclarativeMappedTest):
             a_id = Column(ForeignKey("a.id"))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
-        s = Session(connection)
+        s = Session(testing.db)
         s.add(A(bs=[B(), B(), B()]))
         s.commit()
 
@@ -703,7 +703,6 @@ class RestoreLoadContextTest(fixtures.DeclarativeMappedTest):
                 s.refresh(a1)
         # joined eager load didn't continue
         eq_(len(a1.bs), 1)
-        s.close()
 
     @_combinations
     def test_flag_resolves_existing(self, target, event_name, fn):
@@ -716,7 +715,6 @@ class RestoreLoadContextTest(fixtures.DeclarativeMappedTest):
         s.expire(a1)
         event.listen(target, event_name, fn, restore_load_context=True)
         s.query(A).all()
-        s.close()
 
     @_combinations
     def test_flag_resolves(self, target, event_name, fn):
@@ -730,7 +728,6 @@ class RestoreLoadContextTest(fixtures.DeclarativeMappedTest):
             s.refresh(a1)
         # joined eager load continued
         eq_(len(a1.bs), 3)
-        s.close()
 
 
 class DeclarativeEventListenTest(
@@ -1762,6 +1759,11 @@ class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
         event.listen(sess, "after_begin", canary.after_begin)
         event.listen(sess, "after_bulk_update", canary.after_bulk_update)
 
+        def legacy(ses, qry, ctx, res):
+            canary.after_bulk_update_legacy(ses, qry, ctx, res)
+
+        event.listen(sess, "after_bulk_update", legacy)
+
         mapper(User, users)
 
         sess.query(User).update({"name": "foo"})
@@ -1771,7 +1773,10 @@ class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
 
         upd = canary.after_bulk_update.mock_calls[0][1][0]
         eq_(upd.session, sess)
-        eq_(upd.result.rowcount, 0)
+        eq_(
+            canary.after_bulk_update_legacy.mock_calls,
+            [call(sess, upd.query, upd.context, upd.result)],
+        )
 
     def test_on_bulk_delete_hook(self):
         User, users = self.classes.User, self.tables.users
@@ -1782,6 +1787,11 @@ class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
         event.listen(sess, "after_begin", canary.after_begin)
         event.listen(sess, "after_bulk_delete", canary.after_bulk_delete)
 
+        def legacy(ses, qry, ctx, res):
+            canary.after_bulk_delete_legacy(ses, qry, ctx, res)
+
+        event.listen(sess, "after_bulk_delete", legacy)
+
         mapper(User, users)
 
         sess.query(User).delete()
@@ -1791,7 +1801,10 @@ class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
 
         upd = canary.after_bulk_delete.mock_calls[0][1][0]
         eq_(upd.session, sess)
-        eq_(upd.result.rowcount, 0)
+        eq_(
+            canary.after_bulk_delete_legacy.mock_calls,
+            [call(sess, upd.query, upd.context, upd.result)],
+        )
 
     def test_connection_emits_after_begin(self):
         sess, canary = self._listener_fixture(bind=testing.db)

@@ -11,23 +11,16 @@ r"""
     :connectstring: oracle+cx_oracle://user:pass@host:port/dbname[?key=value&key=value...]
     :url: https://oracle.github.io/python-cx_Oracle/
 
-DSN vs. Hostname connections
------------------------------
+Additional Connect Arguments
+----------------------------
 
-The dialect will connect to a DSN if no database name portion is presented,
-such as::
+When connecting with the ``dbname`` URL token present, the ``hostname``,
+``port``, and ``dbname`` tokens are converted to a TNS name using the
+``cx_Oracle.makedsn()`` function. The URL below::
 
-    engine = create_engine("oracle+cx_oracle://scott:tiger@oracle1120/?encoding=UTF-8&nencoding=UTF-8")
+    e = create_engine("oracle+cx_oracle://user:pass@hostname/dbname")
 
-Above, ``oracle1120`` is passed to cx_Oracle as an Oracle datasource name.
-
-Alternatively, if a database name is present, the ``cx_Oracle.makedsn()``
-function is used to create an ad-hoc "datasource" name assuming host
-and port::
-
-    engine = create_engine("oracle+cx_oracle://scott:tiger@hostname:1521/dbname?encoding=UTF-8&nencoding=UTF-8")
-
-Above, the DSN would be created as follows::
+Will be used to create the DSN as follows::
 
     >>> import cx_Oracle
     >>> cx_Oracle.makedsn("hostname", 1521, sid="dbname")
@@ -36,44 +29,38 @@ Above, the DSN would be created as follows::
 The ``service_name`` parameter, also consumed by ``cx_Oracle.makedsn()``, may
 be specified in the URL query string, e.g. ``?service_name=my_service``.
 
+If ``dbname`` is not present, then the value of ``hostname`` in the
+URL is used directly as the DSN passed to ``cx_Oracle.connect()``.
 
-Passing cx_Oracle connect arguments
------------------------------------
-
-Additional connection arguments can usually be passed via the URL
-query string; particular symbols like ``cx_Oracle.SYSDBA`` are intercepted
-and converted to the correct symbol::
-
-    e = create_engine(
-        "oracle+cx_oracle://user:pass@dsn?encoding=UTF-8&nencoding=UTF-8&mode=SYSDBA&events=true")
-
-.. versionchanged:: 1.3 the cx_oracle dialect now accepts all argument names
-   within the URL string itself, to be passed to the cx_Oracle DBAPI.   As
-   was the case earlier but not correctly documented, the
-   :paramref:`_sa.create_engine.connect_args` parameter also accepts all
-   cx_Oracle DBAPI connect arguments.
-
-To pass arguments directly to ``.connect()`` wihtout using the query
-string, use the :paramref:`_sa.create_engine.connect_args` dictionary.
+Additional connection arguments may be sent to the ``cx_Oracle.connect()``
+function using the :paramref:`.create_engine.connect_args` dictionary.
 Any cx_Oracle parameter value and/or constant may be passed, such as::
 
     import cx_Oracle
     e = create_engine(
         "oracle+cx_oracle://user:pass@dsn",
         connect_args={
-            "encoding": "UTF-8",
-            "nencoding": "UTF-8",
             "mode": cx_Oracle.SYSDBA,
             "events": True
         }
     )
 
-Options consumed by the SQLAlchemy cx_Oracle dialect outside of the driver
---------------------------------------------------------------------------
+Alternatively, most cx_Oracle DBAPI arguments can also be encoded as strings
+within the URL, which includes parameters such as ``mode``, ``purity``,
+``events``, ``threaded``, and others::
+
+    e = create_engine(
+        "oracle+cx_oracle://user:pass@dsn?mode=SYSDBA&events=true")
+
+.. versionchanged:: 1.3 the cx_oracle dialect now accepts all argument names
+   within the URL string itself, to be passed to the cx_Oracle DBAPI.   As
+   was the case earlier but not correctly documented, the
+   :paramref:`.create_engine.connect_args` parameter also accepts all
+   cx_Oracle DBAPI connect arguments.
 
 There are also options that are consumed by the SQLAlchemy cx_oracle dialect
-itself.  These options are always passed directly to :func:`_sa.create_engine`
-, such as::
+itself.  These options are always passed directly to :func:`.create_engine`,
+such as::
 
     e = create_engine(
         "oracle+cx_oracle://user:pass@dsn", coerce_to_unicode=False)
@@ -98,63 +85,28 @@ The parameters accepted by the cx_oracle dialect are as follows:
 Unicode
 -------
 
-As is the case for all DBAPIs under Python 3, all strings are inherently
-Unicode strings.     Under Python 2, cx_Oracle also supports Python Unicode
-objects directly.    In all cases however, the driver requires an explcit
-encoding configuration.
+The cx_Oracle DBAPI as of version 5 fully supports Unicode, and has the
+ability to return string results as Python Unicode objects natively.
 
-Ensuring the Correct Client Encoding
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The long accepted standard for establishing client encoding for nearly all
-Oracle related software is via the `NLS_LANG <https://www.oracle.com/database/technologies/faq-nls-lang.html>`_
-environment variable.   cx_Oracle like most other Oracle drivers will use
-this environment variable as the source of its encoding configuration.  The
-format of this variable is idiosyncratic; a typical value would be
-``AMERICAN_AMERICA.AL32UTF8``.
-
-The cx_Oracle driver also supports a programmatic alternative which is to
-pass the ``encoding`` and ``nencoding`` parameters directly to its
-``.connect()`` function.  These can be present in the URL as follows::
-
-    engine = create_engine("oracle+cx_oracle://scott:tiger@oracle1120/?encoding=UTF-8&nencoding=UTF-8")
-
-For the meaning of the ``encoding`` and ``nencoding`` parameters, please
-consult
-`Characters Sets and National Language Support (NLS) <https://cx-oracle.readthedocs.io/en/latest/user_guide/globalization.html#globalization>`_.
-
-.. seealso::
-
-    `Characters Sets and National Language Support (NLS) <https://cx-oracle.readthedocs.io/en/latest/user_guide/globalization.html#globalization>`_
-    - in the cx_Oracle documentation.
-
-
-Unicode-specific Column datatypes
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The Core expression language handles unicode data by use of the :class:`.Unicode`
-and :class:`.UnicodeText`
-datatypes.  These types correspond to the  VARCHAR2 and CLOB Oracle datatypes by
+Explicit Unicode support is available by using the :class:`.Unicode` datatype
+with SQLAlchemy Core expression language, as well as the :class:`.UnicodeText`
+datatype.  These types correspond to the  VARCHAR2 and CLOB Oracle datatypes by
 default.   When using these datatypes with Unicode data, it is expected that
 the Oracle database is configured with a Unicode-aware character set, as well
 as that the ``NLS_LANG`` environment variable is set appropriately, so that
 the VARCHAR2 and CLOB datatypes can accommodate the data.
 
 In the case that the Oracle database is not configured with a Unicode character
-set, the two options are to use the :class:`_types.NCHAR` and
-:class:`_oracle.NCLOB` datatypes explicitly, or to pass the flag
-``use_nchar_for_unicode=True`` to :func:`_sa.create_engine`,
-which will cause the
+set, the two options are to use the :class:`.oracle.NCHAR` and
+:class:`.oracle.NCLOB` datatypes explicitly, or to pass the flag
+``use_nchar_for_unicode=True`` to :func:`.create_engine`, which will cause the
 SQLAlchemy dialect to use NCHAR/NCLOB for the :class:`.Unicode` /
 :class:`.UnicodeText` datatypes instead of VARCHAR/CLOB.
 
 .. versionchanged:: 1.3  The :class:`.Unicode` and :class:`.UnicodeText`
    datatypes now correspond to the ``VARCHAR2`` and ``CLOB`` Oracle datatypes
    unless the ``use_nchar_for_unicode=True`` is passed to the dialect
-   when :func:`_sa.create_engine` is called.
-
-Unicode Coercion of result rows under Python 2
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   when :func:`.create_engine` is called.
 
 When result sets are fetched that include strings, under Python 3 the cx_Oracle
 DBAPI returns all strings as Python Unicode objects, since Python 3 only has a
@@ -166,12 +118,13 @@ made use of converters that were supplied by cx_Oracle but were found to be
 non-performant; SQLAlchemy's own converters are used for the string to Unicode
 conversion under Python 2.  To disable the Python 2 Unicode conversion for
 VARCHAR2, CHAR, and CLOB, the flag ``coerce_to_unicode=False`` can be passed to
-:func:`_sa.create_engine`.
+:func:`.create_engine`.
 
 .. versionchanged:: 1.3 Unicode conversion is applied to all string values
    by default under python 2.  The ``coerce_to_unicode`` now defaults to True
    and can be set to False to disable the Unicode coercion of strings that are
    delivered as VARCHAR2/CHAR/CLOB data.
+
 
 .. _cx_oracle_unicode_encoding_errors:
 
@@ -282,7 +235,7 @@ As of the 6 series, this limitation has been lifted.  Nevertheless, because
 SQLAlchemy pre-reads these LOBs up front, this issue is avoided in any case.
 
 To disable the auto "read()" feature of the dialect, the flag
-``auto_convert_lobs=False`` may be passed to :func:`_sa.create_engine`.  Under
+``auto_convert_lobs=False`` may be passed to :func:`.create_engine`.  Under
 the cx_Oracle 5 series, having this flag turned off means there is the chance
 of reading from a stale LOB object if not read as it is fetched.   With
 cx_Oracle 6, this issue is resolved.
@@ -307,12 +260,12 @@ Precision Numerics
 
 SQLAlchemy's numeric types can handle receiving and returning values as Python
 ``Decimal`` objects or float objects.  When a :class:`.Numeric` object, or a
-subclass such as :class:`.Float`, :class:`_oracle.DOUBLE_PRECISION` etc. is in
+subclass such as :class:`.Float`, :class:`.oracle.DOUBLE_PRECISION` etc. is in
 use, the :paramref:`.Numeric.asdecimal` flag determines if values should be
 coerced to ``Decimal`` upon return, or returned as float objects.   To make
 matters more complicated under Oracle, Oracle's ``NUMBER`` type can also
 represent integer values if the "scale" is zero, so the Oracle-specific
-:class:`_oracle.NUMBER` type takes this into account as well.
+:class:`.oracle.NUMBER` type takes this into account as well.
 
 The cx_Oracle dialect makes extensive use of connection- and cursor-level
 "outputtypehandler" callables in order to coerce numeric values as requested.
@@ -328,7 +281,7 @@ When no typing objects are present, as when executing plain SQL strings, a
 default "outputtypehandler" is present which will generally return numeric
 values which specify precision and scale as Python ``Decimal`` objects.  To
 disable this coercion to decimal for performance reasons, pass the flag
-``coerce_to_decimal=False`` to :func:`_sa.create_engine`::
+``coerce_to_decimal=False`` to :func:`.create_engine`::
 
     engine = create_engine("oracle+cx_oracle://dsn", coerce_to_decimal=False)
 
@@ -344,6 +297,7 @@ SQLAlchemy type (or a subclass of such).
 
 from __future__ import absolute_import
 
+import collections
 import decimal
 import random
 import re
@@ -356,7 +310,7 @@ from ... import exc
 from ... import processors
 from ... import types as sqltypes
 from ... import util
-from ...engine import cursor as _cursor
+from ...engine import result as _result
 from ...util import compat
 
 
@@ -696,27 +650,6 @@ class OracleExecutionContext_cx_oracle(OracleExecutionContext):
 
         self._generate_cursor_outputtype_handler()
 
-    def post_exec(self):
-        if self.compiled and self.out_parameters and self.compiled.returning:
-            # create a fake cursor result from the out parameters. unlike
-            # get_out_parameter_values(), the result-row handlers here will be
-            # applied at the Result level
-            returning_params = [
-                self.dialect._returningval(self.out_parameters["ret_%d" % i])
-                for i in range(len(self.out_parameters))
-            ]
-
-            fetch_strategy = _cursor.FullyBufferedCursorFetchStrategy(
-                self.cursor,
-                [
-                    (getattr(col, "name", col.anon_label), None)
-                    for col in self.compiled.returning
-                ],
-                initial_buffer=[tuple(returning_params)],
-            )
-
-            self.cursor_fetch_strategy = fetch_strategy
-
     def create_cursor(self):
         c = self._dbapi_connection.cursor()
         if self.dialect.arraysize:
@@ -734,6 +667,43 @@ class OracleExecutionContext_cx_oracle(OracleExecutionContext):
             self.dialect._paramval(self.out_parameters[name])
             for name in out_param_names
         ]
+
+    def get_result_cursor_strategy(self, result):
+        if self.compiled and self.out_parameters and self.compiled.returning:
+            # create a fake cursor result from the out parameters. unlike
+            # get_out_parameter_values(), the result-row handlers here will be
+            # applied at the Result level
+            returning_params = [
+                self.dialect._returningval(self.out_parameters["ret_%d" % i])
+                for i in range(len(self.out_parameters))
+            ]
+
+            return ReturningResultStrategy(
+                result, result.cursor, returning_params
+            )
+        else:
+            return super(
+                OracleExecutionContext_cx_oracle, self
+            ).get_result_cursor_strategy(result)
+
+
+class ReturningResultStrategy(_result.FullyBufferedCursorFetchStrategy):
+    __slots__ = ("_returning_params",)
+
+    def __init__(self, result, dbapi_cursor, returning_params):
+        self._returning_params = returning_params
+
+        returning = result.context.compiled.returning
+        cursor_description = [
+            (getattr(col, "name", col.anon_label), None) for col in returning
+        ]
+
+        super(ReturningResultStrategy, self).__init__(
+            dbapi_cursor, cursor_description
+        )
+
+    def _buffer_rows(self):
+        return collections.deque([tuple(self._returning_params)])
 
 
 class OracleDialect_cx_oracle(OracleDialect):
@@ -786,7 +756,7 @@ class OracleDialect_cx_oracle(OracleDialect):
             "in a future release.  As of version 1.3, it defaults to False "
             "rather than True.  The 'threaded' option can be passed to "
             "cx_Oracle directly in the URL query string passed to "
-            ":func:`_sa.create_engine`.",
+            ":func:`.create_engine`.",
         )
     )
     def __init__(
@@ -942,11 +912,7 @@ class OracleDialect_cx_oracle(OracleDialect):
         def output_type_handler(
             cursor, name, default_type, size, precision, scale
         ):
-
-            if (
-                default_type == cx_Oracle.NUMBER
-                and default_type is not cx_Oracle.NATIVE_FLOAT
-            ):
+            if default_type == cx_Oracle.NUMBER:
                 if not dialect.coerce_to_decimal:
                     return None
                 elif precision == 0 and scale in (0, -127):
@@ -968,11 +934,9 @@ class OracleDialect_cx_oracle(OracleDialect):
                     )
 
             # allow all strings to come back natively as Unicode
-            elif (
-                dialect.coerce_to_unicode
-                and default_type in (cx_Oracle.STRING, cx_Oracle.FIXED_CHAR,)
-                and default_type is not cx_Oracle.CLOB
-                and default_type is not cx_Oracle.NCLOB
+            elif dialect.coerce_to_unicode and default_type in (
+                cx_Oracle.STRING,
+                cx_Oracle.FIXED_CHAR,
             ):
                 if compat.py2k:
                     outconverter = processors.to_unicode_processor_factory(
@@ -1001,16 +965,17 @@ class OracleDialect_cx_oracle(OracleDialect):
                         dialect.encoding, errors=dialect.encoding_errors
                     )
                     return cursor.var(
-                        cx_Oracle.LONG_STRING,
+                        default_type,
                         size,
                         cursor.arraysize,
-                        outconverter=outconverter,
+                        outconverter=lambda value: outconverter(value.read()),
                     )
                 else:
                     return cursor.var(
-                        cx_Oracle.LONG_STRING,
+                        default_type,
                         size,
                         cursor.arraysize,
+                        outconverter=lambda value: value.read(),
                         **dialect._cursor_var_unicode_kwargs
                     )
 
@@ -1018,7 +983,10 @@ class OracleDialect_cx_oracle(OracleDialect):
                 cx_Oracle.BLOB,
             ):
                 return cursor.var(
-                    cx_Oracle.LONG_BINARY, size, cursor.arraysize,
+                    default_type,
+                    size,
+                    cursor.arraysize,
+                    outconverter=lambda value: value.read(),
                 )
 
         return output_type_handler
@@ -1035,12 +1003,12 @@ class OracleDialect_cx_oracle(OracleDialect):
     def create_connect_args(self, url):
         opts = dict(url.query)
 
+        # deprecated in 1.3
         for opt in ("use_ansi", "auto_convert_lobs"):
             if opt in opts:
                 util.warn_deprecated(
                     "cx_oracle dialect option %r should only be passed to "
-                    "create_engine directly, not within the URL string" % opt,
-                    version="1.3",
+                    "create_engine directly, not within the URL string" % opt
                 )
                 util.coerce_kw_type(opts, opt, bool)
                 setattr(self, opt, opts.pop(opt))
@@ -1096,6 +1064,7 @@ class OracleDialect_cx_oracle(OracleDialect):
         util.coerce_kw_type(opts, "threaded", bool)
         util.coerce_kw_type(opts, "events", bool)
         util.coerce_kw_type(opts, "purity", convert_cx_oracle_constant)
+
         return ([], opts)
 
     def _get_server_version_info(self, connection):

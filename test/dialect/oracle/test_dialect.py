@@ -103,18 +103,23 @@ class EncodingErrorsTest(fixtures.TestBase):
         )
 
     _oracle_char_combinations = testing.combinations(
-        ("STRING", cx_Oracle_STRING,),
-        ("FIXED_CHAR", cx_Oracle_FIXED_CHAR,),
-        ("CLOB", cx_Oracle_CLOB,),
-        ("NCLOB", cx_Oracle_NCLOB,),
-        argnames="cx_oracle_type",
-        id_="ia",
+        ("STRING", cx_Oracle_STRING, False),
+        ("FIXED_CHAR", cx_Oracle_FIXED_CHAR, False),
+        ("CLOB", cx_Oracle_CLOB, True),
+        ("NCLOB", cx_Oracle_NCLOB, True),
+        argnames="cx_oracle_type,use_read",
+        id_="iaa",
     )
 
-    def _assert_errorhandler(self, outconverter, has_errorhandler):
+    def _assert_errorhandler(self, outconverter, use_read, has_errorhandler):
         data = ue("\uee2c\u9a66")  # this is u"\uee2c\u9a66"
 
         utf8_w_errors = data.encode("utf-16")
+
+        if use_read:
+            utf8_w_errors = mock.Mock(
+                read=mock.Mock(return_value=utf8_w_errors)
+            )
 
         if has_errorhandler:
 
@@ -127,7 +132,9 @@ class EncodingErrorsTest(fixtures.TestBase):
 
     @_oracle_char_combinations
     @testing.requires.python3
-    def test_older_cx_oracle_warning(self, cx_Oracle, cx_oracle_type):
+    def test_older_cx_oracle_warning(
+        self, cx_Oracle, cx_oracle_type, use_read
+    ):
         cx_Oracle.version = "6.3"
 
         ignore_dialect = cx_oracle.dialect(
@@ -149,7 +156,7 @@ class EncodingErrorsTest(fixtures.TestBase):
     @_oracle_char_combinations
     @testing.requires.python2
     def test_encoding_errors_sqla_py2k(
-        self, cx_Oracle, cx_oracle_type,
+        self, cx_Oracle, cx_oracle_type, use_read
     ):
         ignore_dialect = cx_oracle.dialect(
             dbapi=cx_Oracle, encoding_errors="ignore"
@@ -162,12 +169,12 @@ class EncodingErrorsTest(fixtures.TestBase):
         cursor = mock.Mock()
         ignore_outputhandler(cursor, "foo", cx_oracle_type, None, None, None)
         outconverter = cursor.mock_calls[0][2]["outconverter"]
-        self._assert_errorhandler(outconverter, True)
+        self._assert_errorhandler(outconverter, use_read, True)
 
     @_oracle_char_combinations
     @testing.requires.python2
     def test_no_encoding_errors_sqla_py2k(
-        self, cx_Oracle, cx_oracle_type,
+        self, cx_Oracle, cx_oracle_type, use_read
     ):
         plain_dialect = cx_oracle.dialect(dbapi=cx_Oracle)
 
@@ -178,12 +185,12 @@ class EncodingErrorsTest(fixtures.TestBase):
         cursor = mock.Mock()
         plain_outputhandler(cursor, "foo", cx_oracle_type, None, None, None)
         outconverter = cursor.mock_calls[0][2]["outconverter"]
-        self._assert_errorhandler(outconverter, False)
+        self._assert_errorhandler(outconverter, use_read, False)
 
     @_oracle_char_combinations
     @testing.requires.python3
     def test_encoding_errors_cx_oracle_py3k(
-        self, cx_Oracle, cx_oracle_type,
+        self, cx_Oracle, cx_oracle_type, use_read
     ):
         ignore_dialect = cx_oracle.dialect(
             dbapi=cx_Oracle, encoding_errors="ignore"
@@ -196,19 +203,36 @@ class EncodingErrorsTest(fixtures.TestBase):
         cursor = mock.Mock()
         ignore_outputhandler(cursor, "foo", cx_oracle_type, None, None, None)
 
-        eq_(
-            cursor.mock_calls,
-            [
-                mock.call.var(
-                    mock.ANY, None, cursor.arraysize, encodingErrors="ignore",
-                )
-            ],
-        )
+        if use_read:
+            eq_(
+                cursor.mock_calls,
+                [
+                    mock.call.var(
+                        mock.ANY,
+                        None,
+                        cursor.arraysize,
+                        encodingErrors="ignore",
+                        outconverter=mock.ANY,
+                    )
+                ],
+            )
+        else:
+            eq_(
+                cursor.mock_calls,
+                [
+                    mock.call.var(
+                        mock.ANY,
+                        None,
+                        cursor.arraysize,
+                        encodingErrors="ignore",
+                    )
+                ],
+            )
 
     @_oracle_char_combinations
     @testing.requires.python3
     def test_no_encoding_errors_cx_oracle_py3k(
-        self, cx_Oracle, cx_oracle_type,
+        self, cx_Oracle, cx_oracle_type, use_read
     ):
         plain_dialect = cx_oracle.dialect(dbapi=cx_Oracle)
 
@@ -219,10 +243,20 @@ class EncodingErrorsTest(fixtures.TestBase):
         cursor = mock.Mock()
         plain_outputhandler(cursor, "foo", cx_oracle_type, None, None, None)
 
-        eq_(
-            cursor.mock_calls,
-            [mock.call.var(mock.ANY, None, cursor.arraysize)],
-        )
+        if use_read:
+            eq_(
+                cursor.mock_calls,
+                [
+                    mock.call.var(
+                        mock.ANY, None, cursor.arraysize, outconverter=mock.ANY
+                    )
+                ],
+            )
+        else:
+            eq_(
+                cursor.mock_calls,
+                [mock.call.var(mock.ANY, None, cursor.arraysize)],
+            )
 
 
 class ComputedReturningTest(fixtures.TablesTest):
@@ -312,8 +346,8 @@ end;
                 """
             )
 
-    def test_out_params(self, connection):
-        result = connection.execute(
+    def test_out_params(self):
+        result = testing.db.execute(
             text(
                 "begin foo(:x_in, :x_out, :y_out, " ":z_out); end;"
             ).bindparams(
@@ -329,8 +363,7 @@ end;
 
     @classmethod
     def teardown_class(cls):
-        with testing.db.connect() as conn:
-            conn.execute(text("DROP PROCEDURE foo"))
+        testing.db.execute(text("DROP PROCEDURE foo"))
 
 
 class QuotedBindRoundTripTest(fixtures.TestBase):
@@ -339,7 +372,7 @@ class QuotedBindRoundTripTest(fixtures.TestBase):
     __backend__ = True
 
     @testing.provide_metadata
-    def test_table_round_trip(self, connection):
+    def test_table_round_trip(self):
         oracle.RESERVED_WORDS.remove("UNION")
 
         metadata = self.metadata
@@ -355,16 +388,14 @@ class QuotedBindRoundTripTest(fixtures.TestBase):
         )
         metadata.create_all()
 
-        connection.execute(
-            table.insert(), {"option": 1, "plain": 1, "union": 1}
-        )
-        eq_(connection.execute(table.select()).first(), (1, 1, 1))
-        connection.execute(table.update().values(option=2, plain=2, union=2))
-        eq_(connection.execute(table.select()).first(), (2, 2, 2))
+        table.insert().execute({"option": 1, "plain": 1, "union": 1})
+        eq_(testing.db.execute(table.select()).first(), (1, 1, 1))
+        table.update().values(option=2, plain=2, union=2).execute()
+        eq_(testing.db.execute(table.select()).first(), (2, 2, 2))
 
-    def test_numeric_bind_round_trip(self, connection):
+    def test_numeric_bind_round_trip(self):
         eq_(
-            connection.scalar(
+            testing.db.scalar(
                 select(
                     [
                         literal_column("2", type_=Integer())
@@ -376,22 +407,25 @@ class QuotedBindRoundTripTest(fixtures.TestBase):
         )
 
     @testing.provide_metadata
-    def test_numeric_bind_in_crud(self, connection):
+    def test_numeric_bind_in_crud(self):
         t = Table("asfd", self.metadata, Column("100K", Integer))
-        t.create(connection)
+        t.create()
 
-        connection.execute(t.insert(), {"100K": 10})
-        eq_(connection.scalar(t.select()), 10)
+        testing.db.execute(t.insert(), {"100K": 10})
+        eq_(testing.db.scalar(t.select()), 10)
 
     @testing.provide_metadata
-    def test_expanding_quote_roundtrip(self, connection):
+    def test_expanding_quote_roundtrip(self):
         t = Table("asfd", self.metadata, Column("foo", Integer))
-        t.create(connection)
+        t.create()
 
-        connection.execute(
-            select([t]).where(t.c.foo.in_(bindparam("uid", expanding=True))),
-            uid=[1, 2, 3],
-        )
+        with testing.db.connect() as conn:
+            conn.execute(
+                select([t]).where(
+                    t.c.foo.in_(bindparam("uid", expanding=True))
+                ),
+                uid=[1, 2, 3],
+            )
 
 
 class CompatFlagsTest(fixtures.TestBase, AssertsCompiledSQL):
@@ -590,15 +624,15 @@ class ExecuteTest(fixtures.TestBase):
                 [(1,)],
             )
 
-    def test_sequences_are_integers(self, connection):
+    def test_sequences_are_integers(self):
         seq = Sequence("foo_seq")
-        seq.create(connection)
+        seq.create(testing.db)
         try:
-            val = connection.execute(seq)
+            val = testing.db.execute(seq)
             eq_(val, 1)
             assert type(val) is int
         finally:
-            seq.drop(connection)
+            seq.drop(testing.db)
 
     @testing.provide_metadata
     def test_limit_offset_for_update(self):
@@ -642,7 +676,7 @@ class UnicodeSchemaTest(fixtures.TestBase):
     __backend__ = True
 
     @testing.provide_metadata
-    def test_quoted_column_non_unicode(self, connection):
+    def test_quoted_column_non_unicode(self):
         metadata = self.metadata
         table = Table(
             "atable",
@@ -651,14 +685,14 @@ class UnicodeSchemaTest(fixtures.TestBase):
         )
         metadata.create_all()
 
-        connection.execute(table.insert(), {"_underscorecolumn": u("’é")})
-        result = connection.execute(
+        table.insert().execute({"_underscorecolumn": u("’é")})
+        result = testing.db.execute(
             table.select().where(table.c._underscorecolumn == u("’é"))
         ).scalar()
         eq_(result, u("’é"))
 
     @testing.provide_metadata
-    def test_quoted_column_unicode(self, connection):
+    def test_quoted_column_unicode(self):
         metadata = self.metadata
         table = Table(
             "atable",
@@ -667,8 +701,8 @@ class UnicodeSchemaTest(fixtures.TestBase):
         )
         metadata.create_all()
 
-        connection.execute(table.insert(), {u("méil"): u("’é")})
-        result = connection.execute(
+        table.insert().execute({u("méil"): u("’é")})
+        result = testing.db.execute(
             table.select().where(table.c[u("méil")] == u("’é"))
         ).scalar()
         eq_(result, u("’é"))

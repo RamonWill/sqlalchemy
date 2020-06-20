@@ -6,7 +6,7 @@
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
 """private module containing functions used to emit INSERT, UPDATE
-and DELETE statements on behalf of a :class:`_orm.Mapper` and its descending
+and DELETE statements on behalf of a :class:`.Mapper` and its descending
 mappers.
 
 The functions here are called only by the unit of work functions
@@ -23,22 +23,17 @@ from . import evaluator
 from . import exc as orm_exc
 from . import loading
 from . import sync
+from .base import _entity_descriptor
 from .base import state_str
 from .. import exc as sa_exc
-from .. import future
 from .. import sql
 from .. import util
-from ..future import select as future_select
 from ..sql import coercions
 from ..sql import expression
 from ..sql import operators
 from ..sql import roles
-from ..sql.base import CompileState
-from ..sql.base import Options
-from ..sql.dml import DeleteDMLState
-from ..sql.dml import UpdateDMLState
+from ..sql.base import _from_objects
 from ..sql.elements import BooleanClauseList
-from ..sql.util import _entity_namespace_key
 
 
 def _bulk_insert(
@@ -1430,10 +1425,8 @@ def _finalize_insert_update_commands(base_mapper, uowtransaction, states):
 
         if toload_now:
             state.key = base_mapper._identity_key_from_state(state)
-            stmt = future.select(mapper).apply_labels()
             loading.load_on_ident(
-                uowtransaction.session,
-                stmt,
+                uowtransaction.session.query(mapper),
                 state.key,
                 refresh_state=state,
                 only_load_props=toload_now,
@@ -1655,197 +1648,231 @@ def _sort_states(mapper, states):
     )
 
 
-_EMPTY_DICT = util.immutabledict()
+class BulkUD(object):
+    """Handle bulk update and deletes via a :class:`.Query`."""
 
+    def __init__(self, query):
+        self.query = query.enable_eagerloads(False)
+        self.mapper = self.query._bind_mapper()
+        self._validate_query_state()
 
-class BulkUDCompileState(CompileState):
-    class default_update_options(Options):
-        _synchronize_session = "evaluate"
-        _autoflush = True
-        _subject_mapper = None
-        _resolved_values = _EMPTY_DICT
-        _resolved_keys_as_propnames = _EMPTY_DICT
-        _value_evaluators = _EMPTY_DICT
-        _matched_objects = None
-        _matched_rows = None
-        _refresh_identity_token = None
+    def _validate_query_state(self):
+        for attr, methname, notset, op in (
+            ("_limit", "limit()", None, operator.is_),
+            ("_offset", "offset()", None, operator.is_),
+            ("_order_by", "order_by()", False, operator.is_),
+            ("_group_by", "group_by()", False, operator.is_),
+            ("_distinct", "distinct()", False, operator.is_),
+            (
+                "_from_obj",
+                "join(), outerjoin(), select_from(), or from_self()",
+                (),
+                operator.eq,
+            ),
+        ):
+            if not op(getattr(self.query, attr), notset):
+                raise sa_exc.InvalidRequestError(
+                    "Can't call Query.update() or Query.delete() "
+                    "when %s has been called" % (methname,)
+                )
+
+    @property
+    def session(self):
+        return self.query.session
 
     @classmethod
-    def orm_pre_session_exec(
-        cls, session, statement, params, execution_options, bind_arguments
-    ):
-        sync = execution_options.get("synchronize_session", None)
-        if sync is None:
-            sync = statement._execution_options.get(
-                "synchronize_session", None
-            )
-
-        update_options = execution_options.get(
-            "_sa_orm_update_options",
-            BulkUDCompileState.default_update_options,
-        )
-
-        if sync is not None:
-            if sync not in ("evaluate", "fetch", False):
-                raise sa_exc.ArgumentError(
-                    "Valid strategies for session synchronization "
-                    "are 'evaluate', 'fetch', False"
-                )
-            update_options += {"_synchronize_session": sync}
-
-        bind_arguments["clause"] = statement
+    def _factory(cls, lookup, synchronize_session, *arg):
         try:
-            plugin_subject = statement._propagate_attrs["plugin_subject"]
-        except KeyError:
-            assert False, "statement had 'orm' plugin but no plugin_subject"
+            klass = lookup[synchronize_session]
+        except KeyError as err:
+            util.raise_(
+                sa_exc.ArgumentError(
+                    "Valid strategies for session synchronization "
+                    "are %s" % (", ".join(sorted(repr(x) for x in lookup)))
+                ),
+                replace_context=err,
+            )
         else:
-            bind_arguments["mapper"] = plugin_subject.mapper
+            return klass(*arg)
 
-        update_options += {"_subject_mapper": plugin_subject.mapper}
+    def exec_(self):
+        self._do_before_compile()
+        self._do_pre()
+        self._do_pre_synchronize()
+        self._do_exec()
+        self._do_post_synchronize()
+        self._do_post()
 
-        if update_options._autoflush:
+    def _execute_stmt(self, stmt):
+        self.result = self.query._execute_crud(stmt, self.mapper)
+        self.rowcount = self.result.rowcount
+
+    def _do_before_compile(self):
+        raise NotImplementedError()
+
+    @util.preload_module("sqlalchemy.orm.query")
+    def _do_pre(self):
+        querylib = util.preloaded.orm_query
+        query = self.query
+
+        self.context = querylib.QueryContext(query)
+
+        if isinstance(query._entities[0], querylib._ColumnEntity):
+            # check for special case of query(table)
+            tables = set()
+            for ent in query._entities:
+                if not isinstance(ent, querylib._ColumnEntity):
+                    tables.clear()
+                    break
+                else:
+                    tables.update(_from_objects(ent.column))
+
+            if len(tables) != 1:
+                raise sa_exc.InvalidRequestError(
+                    "This operation requires only one Table or "
+                    "entity be specified as the target."
+                )
+            else:
+                self.primary_table = tables.pop()
+
+        else:
+            self.primary_table = query._only_entity_zero(
+                "This operation requires only one Table or "
+                "entity be specified as the target."
+            ).mapper.local_table
+
+        session = query.session
+
+        if query._autoflush:
             session._autoflush()
 
-        if update_options._synchronize_session == "evaluate":
-            update_options = cls._do_pre_synchronize_evaluate(
-                session,
-                statement,
-                params,
-                execution_options,
-                bind_arguments,
-                update_options,
-            )
-        elif update_options._synchronize_session == "fetch":
-            update_options = cls._do_pre_synchronize_fetch(
-                session,
-                statement,
-                params,
-                execution_options,
-                bind_arguments,
-                update_options,
-            )
+    def _do_pre_synchronize(self):
+        pass
 
-        return util.immutabledict(execution_options).union(
-            dict(_sa_orm_update_options=update_options)
-        )
+    def _do_post_synchronize(self):
+        pass
 
-    @classmethod
-    def orm_setup_cursor_result(
-        cls, session, statement, execution_options, bind_arguments, result
-    ):
-        update_options = execution_options["_sa_orm_update_options"]
-        if update_options._synchronize_session == "evaluate":
-            cls._do_post_synchronize_evaluate(session, update_options)
-        elif update_options._synchronize_session == "fetch":
-            cls._do_post_synchronize_fetch(session, update_options)
 
-        return result
+class BulkEvaluate(BulkUD):
+    """BulkUD which does the 'evaluate' method of session state resolution."""
 
-    @classmethod
-    def _do_pre_synchronize_evaluate(
-        cls,
-        session,
-        statement,
-        params,
-        execution_options,
-        bind_arguments,
-        update_options,
-    ):
-        mapper = update_options._subject_mapper
-        target_cls = mapper.class_
+    def _additional_evaluators(self, evaluator_compiler):
+        pass
 
-        value_evaluators = resolved_keys_as_propnames = _EMPTY_DICT
+    def _do_pre_synchronize(self):
+        query = self.query
+        target_cls = query._mapper_zero().class_
 
         try:
             evaluator_compiler = evaluator.EvaluatorCompiler(target_cls)
-            if statement._where_criteria:
-                eval_condition = evaluator_compiler.process(
-                    *statement._where_criteria
-                )
+            if query.whereclause is not None:
+                eval_condition = evaluator_compiler.process(query.whereclause)
             else:
 
                 def eval_condition(obj):
                     return True
 
-            # TODO: something more robust for this conditional
-            if statement.__visit_name__ == "update":
-                resolved_values = cls._get_resolved_values(mapper, statement)
-                value_evaluators = {}
-                resolved_keys_as_propnames = cls._resolved_keys_as_propnames(
-                    mapper, resolved_values
-                )
-                for key, value in resolved_keys_as_propnames:
-                    value_evaluators[key] = evaluator_compiler.process(
-                        coercions.expect(roles.ExpressionElementRole, value)
-                    )
+            self._additional_evaluators(evaluator_compiler)
 
         except evaluator.UnevaluatableError as err:
             util.raise_(
                 sa_exc.InvalidRequestError(
                     'Could not evaluate current criteria in Python: "%s". '
                     "Specify 'fetch' or False for the "
-                    "synchronize_session execution option." % err
+                    "synchronize_session parameter." % err
                 ),
                 from_=err,
             )
 
         # TODO: detect when the where clause is a trivial primary key match
-        matched_objects = [
+        self.matched_objects = [
             obj
-            for (cls, pk, identity_token,), obj in session.identity_map.items()
-            if issubclass(cls, target_cls)
-            and eval_condition(obj)
-            and identity_token == update_options._refresh_identity_token
+            for (
+                cls,
+                pk,
+                identity_token,
+            ), obj in query.session.identity_map.items()
+            if issubclass(cls, target_cls) and eval_condition(obj)
         ]
-        return update_options + {
-            "_matched_objects": matched_objects,
-            "_value_evaluators": value_evaluators,
-            "_resolved_keys_as_propnames": resolved_keys_as_propnames,
-        }
+
+
+class BulkFetch(BulkUD):
+    """BulkUD which does the 'fetch' method of session state resolution."""
+
+    def _do_pre_synchronize(self):
+        query = self.query
+        session = query.session
+        context = query._compile_context()
+        select_stmt = context.statement.with_only_columns(
+            self.primary_table.primary_key
+        )
+        self.matched_rows = session.execute(
+            select_stmt, mapper=self.mapper, params=query._params
+        ).fetchall()
+
+
+class BulkUpdate(BulkUD):
+    """BulkUD which handles UPDATEs."""
+
+    def __init__(self, query, values, update_kwargs):
+        super(BulkUpdate, self).__init__(query)
+        self.values = values
+        self.update_kwargs = update_kwargs
 
     @classmethod
-    def _get_resolved_values(cls, mapper, statement):
-        if statement._multi_values:
-            return []
-        elif statement._ordered_values:
-            iterator = statement._ordered_values
-        elif statement._values:
-            iterator = statement._values.items()
-        else:
-            return []
+    def factory(cls, query, synchronize_session, values, update_kwargs):
+        return BulkUD._factory(
+            {
+                "evaluate": BulkUpdateEvaluate,
+                "fetch": BulkUpdateFetch,
+                False: BulkUpdate,
+            },
+            synchronize_session,
+            query,
+            values,
+            update_kwargs,
+        )
 
+    def _do_before_compile(self):
+        if self.query.dispatch.before_compile_update:
+            for fn in self.query.dispatch.before_compile_update:
+                new_query = fn(self.query, self)
+                if new_query is not None:
+                    self.query = new_query
+
+    @property
+    def _resolved_values(self):
         values = []
-        if iterator:
-            for k, v in iterator:
-                if mapper:
-                    if isinstance(k, util.string_types):
-                        desc = sql.util._entity_namespace_key(mapper, k)
-                        values.extend(desc._bulk_update_tuples(v))
-                    elif "entity_namespace" in k._annotations:
-                        k_anno = k._annotations
-                        attr = _entity_namespace_key(
-                            k_anno["entity_namespace"], k_anno["orm_key"]
-                        )
-                        values.extend(attr._bulk_update_tuples(v))
-                    else:
-                        values.append((k, v))
+        for k, v in (
+            self.values.items()
+            if hasattr(self.values, "items")
+            else self.values
+        ):
+            if self.mapper:
+                if isinstance(k, util.string_types):
+                    desc = _entity_descriptor(self.mapper, k)
+                    values.extend(desc._bulk_update_tuples(v))
+                elif isinstance(k, attributes.QueryableAttribute):
+                    values.extend(k._bulk_update_tuples(v))
                 else:
                     values.append((k, v))
+            else:
+                values.append((k, v))
         return values
 
-    @classmethod
-    def _resolved_keys_as_propnames(cls, mapper, resolved_values):
+    @property
+    def _resolved_values_keys_as_propnames(self):
         values = []
-        for k, v in resolved_values:
+        for k, v in self._resolved_values:
             if isinstance(k, attributes.QueryableAttribute):
                 values.append((k.key, v))
                 continue
             elif hasattr(k, "__clause_element__"):
                 k = k.__clause_element__()
 
-            if mapper and isinstance(k, expression.ColumnElement):
+            if self.mapper and isinstance(k, expression.ColumnElement):
                 try:
-                    attr = mapper._columntoproperty[k]
+                    attr = self.mapper._columntoproperty[k]
                 except orm_exc.UnmappedColumnError:
                     pass
                 else:
@@ -1856,99 +1883,87 @@ class BulkUDCompileState(CompileState):
                 )
         return values
 
-    @classmethod
-    def _do_pre_synchronize_fetch(
-        cls,
-        session,
-        statement,
-        params,
-        execution_options,
-        bind_arguments,
-        update_options,
-    ):
-        mapper = update_options._subject_mapper
+    def _do_exec(self):
+        values = self._resolved_values
 
-        if mapper:
-            primary_table = mapper.local_table
-        else:
-            primary_table = statement._raw_columns[0]
+        if not self.update_kwargs.get("preserve_parameter_order", False):
+            values = dict(values)
 
-        # note this creates a Select() *without* the ORM plugin.
-        # we don't want that here.
-        select_stmt = future_select(*primary_table.primary_key)
-        select_stmt._where_criteria = statement._where_criteria
-
-        matched_rows = session.execute(
-            select_stmt, params, execution_options, bind_arguments
-        ).fetchall()
-
-        if statement.__visit_name__ == "update":
-            resolved_values = cls._get_resolved_values(mapper, statement)
-            resolved_keys_as_propnames = cls._resolved_keys_as_propnames(
-                mapper, resolved_values
-            )
-        else:
-            resolved_keys_as_propnames = _EMPTY_DICT
-
-        return update_options + {
-            "_matched_rows": matched_rows,
-            "_resolved_keys_as_propnames": resolved_keys_as_propnames,
-        }
-
-
-@CompileState.plugin_for("orm", "update")
-class BulkORMUpdate(UpdateDMLState, BulkUDCompileState):
-    @classmethod
-    def create_for_statement(cls, statement, compiler, **kw):
-
-        self = cls.__new__(cls)
-
-        self.mapper = mapper = statement.table._annotations.get(
-            "parentmapper", None
+        update_stmt = sql.update(
+            self.primary_table,
+            self.context.whereclause,
+            values,
+            **self.update_kwargs
         )
 
-        self._resolved_values = cls._get_resolved_values(mapper, statement)
+        self._execute_stmt(update_stmt)
 
-        if not statement._preserve_parameter_order and statement._values:
-            self._resolved_values = dict(self._resolved_values)
+    def _do_post(self):
+        session = self.query.session
+        session.dispatch.after_bulk_update(self)
 
-        new_stmt = sql.Update.__new__(sql.Update)
-        new_stmt.__dict__.update(statement.__dict__)
-        new_stmt.table = mapper.local_table
 
-        # note if the statement has _multi_values, these
-        # are passed through to the new statement, which will then raise
-        # InvalidRequestError because UPDATE doesn't support multi_values
-        # right now.
-        if statement._ordered_values:
-            new_stmt._ordered_values = self._resolved_values
-        elif statement._values:
-            new_stmt._values = self._resolved_values
+class BulkDelete(BulkUD):
+    """BulkUD which handles DELETEs."""
 
-        UpdateDMLState.__init__(self, new_stmt, compiler, **kw)
-
-        return self
+    def __init__(self, query):
+        super(BulkDelete, self).__init__(query)
 
     @classmethod
-    def _do_post_synchronize_evaluate(cls, session, update_options):
+    def factory(cls, query, synchronize_session):
+        return BulkUD._factory(
+            {
+                "evaluate": BulkDeleteEvaluate,
+                "fetch": BulkDeleteFetch,
+                False: BulkDelete,
+            },
+            synchronize_session,
+            query,
+        )
 
+    def _do_before_compile(self):
+        if self.query.dispatch.before_compile_delete:
+            for fn in self.query.dispatch.before_compile_delete:
+                new_query = fn(self.query, self)
+                if new_query is not None:
+                    self.query = new_query
+
+    def _do_exec(self):
+        delete_stmt = sql.delete(self.primary_table, self.context.whereclause)
+
+        self._execute_stmt(delete_stmt)
+
+    def _do_post(self):
+        session = self.query.session
+        session.dispatch.after_bulk_delete(self)
+
+
+class BulkUpdateEvaluate(BulkEvaluate, BulkUpdate):
+    """BulkUD which handles UPDATEs using the "evaluate"
+    method of session resolution."""
+
+    def _additional_evaluators(self, evaluator_compiler):
+        self.value_evaluators = {}
+        values = self._resolved_values_keys_as_propnames
+        for key, value in values:
+            self.value_evaluators[key] = evaluator_compiler.process(
+                coercions.expect(roles.ExpressionElementRole, value)
+            )
+
+    def _do_post_synchronize(self):
+        session = self.query.session
         states = set()
-        evaluated_keys = list(update_options._value_evaluators.keys())
-        for obj in update_options._matched_objects:
-
+        evaluated_keys = list(self.value_evaluators.keys())
+        for obj in self.matched_objects:
             state, dict_ = (
                 attributes.instance_state(obj),
                 attributes.instance_dict(obj),
             )
 
-            assert (
-                state.identity_token == update_options._refresh_identity_token
-            )
-
             # only evaluate unmodified attributes
             to_evaluate = state.unmodified.intersection(evaluated_keys)
             for key in to_evaluate:
-                dict_[key] = update_options._value_evaluators[key](obj)
+                dict_[key] = self.value_evaluators[key](obj)
 
             state.manager.dispatch.refresh(state, None, to_evaluate)
 
@@ -1962,25 +1977,39 @@ class BulkORMUpdate(UpdateDMLState, BulkUDCompileState):
             states.add(state)
         session._register_altered(states)
 
-    @classmethod
-    def _do_post_synchronize_fetch(cls, session, update_options):
-        target_mapper = update_options._subject_mapper
+
+class BulkDeleteEvaluate(BulkEvaluate, BulkDelete):
+    """BulkUD which handles DELETEs using the "evaluate"
+    method of session resolution."""
+
+    def _do_post_synchronize(self):
+        self.query.session._remove_newly_deleted(
+            [attributes.instance_state(obj) for obj in self.matched_objects]
+        )
+
+
+class BulkUpdateFetch(BulkFetch, BulkUpdate):
+    """BulkUD which handles UPDATEs using the "fetch"
+    method of session resolution."""
+
+    def _do_post_synchronize(self):
+        session = self.query.session
+        target_mapper = self.query._mapper_zero()
 
         states = set(
             [
                 attributes.instance_state(session.identity_map[identity_key])
                 for identity_key in [
                     target_mapper.identity_key_from_primary_key(
-                        list(primary_key),
-                        identity_token=update_options._refresh_identity_token,
+                        list(primary_key)
                     )
-                    for primary_key in update_options._matched_rows
+                    for primary_key in self.matched_rows
                 ]
                 if identity_key in session.identity_map
             ]
         )
 
-        values = update_options._resolved_keys_as_propnames
+        values = self._resolved_values_keys_as_propnames
         attrib = set(k for k, v in values)
         for state in states:
             to_expire = attrib.intersection(state.dict)
@@ -1989,38 +2018,18 @@ class BulkORMUpdate(UpdateDMLState, BulkUDCompileState):
         session._register_altered(states)
 
 
-@CompileState.plugin_for("orm", "delete")
-class BulkORMDelete(DeleteDMLState, BulkUDCompileState):
-    @classmethod
-    def create_for_statement(cls, statement, compiler, **kw):
-        self = cls.__new__(cls)
+class BulkDeleteFetch(BulkFetch, BulkDelete):
+    """BulkUD which handles DELETEs using the "fetch"
+    method of session resolution."""
 
-        self.mapper = statement.table._annotations.get("parentmapper", None)
-
-        DeleteDMLState.__init__(self, statement, compiler, **kw)
-
-        return self
-
-    @classmethod
-    def _do_post_synchronize_evaluate(cls, session, update_options):
-
-        session._remove_newly_deleted(
-            [
-                attributes.instance_state(obj)
-                for obj in update_options._matched_objects
-            ]
-        )
-
-    @classmethod
-    def _do_post_synchronize_fetch(cls, session, update_options):
-        target_mapper = update_options._subject_mapper
-
-        for primary_key in update_options._matched_rows:
+    def _do_post_synchronize(self):
+        session = self.query.session
+        target_mapper = self.query._mapper_zero()
+        for primary_key in self.matched_rows:
             # TODO: inline this and call remove_newly_deleted
             # once
             identity_key = target_mapper.identity_key_from_primary_key(
-                list(primary_key),
-                identity_token=update_options._refresh_identity_token,
+                list(primary_key)
             )
             if identity_key in session.identity_map:
                 session._remove_newly_deleted(

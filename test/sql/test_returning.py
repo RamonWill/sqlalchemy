@@ -53,17 +53,16 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
             Column("full", Boolean),
             Column("goofy", GoofyType(50)),
         )
-        with testing.db.connect() as conn:
-            table.create(conn, checkfirst=True)
+        table.create(checkfirst=True)
 
     def teardown(self):
-        with testing.db.connect() as conn:
-            table.drop(conn)
+        table.drop()
 
-    def test_column_targeting(self, connection):
-        result = connection.execute(
-            table.insert().returning(table.c.id, table.c.full),
-            {"persons": 1, "full": False},
+    def test_column_targeting(self):
+        result = (
+            table.insert()
+            .returning(table.c.id, table.c.full)
+            .execute({"persons": 1, "full": False})
         )
 
         row = result.first()._mapping
@@ -71,10 +70,11 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
         assert row[table.c.full] == row["full"]
         assert row["full"] is False
 
-        result = connection.execute(
+        result = (
             table.insert()
             .values(persons=5, full=True, goofy="somegoofy")
             .returning(table.c.persons, table.c.full, table.c.goofy)
+            .execute()
         )
         row = result.first()._mapping
         assert row[table.c.persons] == row["persons"] == 5
@@ -84,11 +84,12 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
         eq_(row["goofy"], "FOOsomegoofyBAR")
 
     @testing.fails_on("firebird", "fb can't handle returning x AS y")
-    def test_labeling(self, connection):
-        result = connection.execute(
+    def test_labeling(self):
+        result = (
             table.insert()
             .values(persons=6)
             .returning(table.c.persons.label("lala"))
+            .execute()
         )
         row = result.first()._mapping
         assert row["lala"] == 6
@@ -96,48 +97,53 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
     @testing.fails_on(
         "firebird", "fb/kintersbasdb can't handle the bind params"
     )
-    def test_anon_expressions(self, connection):
-        result = connection.execute(
+    def test_anon_expressions(self):
+        result = (
             table.insert()
             .values(goofy="someOTHERgoofy")
             .returning(func.lower(table.c.goofy, type_=GoofyType))
+            .execute()
         )
         row = result.first()
         eq_(row[0], "foosomeothergoofyBAR")
 
-        result = connection.execute(
-            table.insert().values(persons=12).returning(table.c.persons + 18)
+        result = (
+            table.insert()
+            .values(persons=12)
+            .returning(table.c.persons + 18)
+            .execute()
         )
         row = result.first()
         eq_(row[0], 30)
 
-    def test_update_returning(self, connection):
-        connection.execute(
-            table.insert(),
-            [{"persons": 5, "full": False}, {"persons": 3, "full": False}],
+    def test_update_returning(self):
+        table.insert().execute(
+            [{"persons": 5, "full": False}, {"persons": 3, "full": False}]
         )
 
-        result = connection.execute(
-            table.update(table.c.persons > 4, dict(full=True)).returning(
-                table.c.id
-            )
+        result = (
+            table.update(table.c.persons > 4, dict(full=True))
+            .returning(table.c.id)
+            .execute()
         )
         eq_(result.fetchall(), [(1,)])
 
-        result2 = connection.execute(
-            select([table.c.id, table.c.full]).order_by(table.c.id)
+        result2 = (
+            select([table.c.id, table.c.full]).order_by(table.c.id).execute()
         )
         eq_(result2.fetchall(), [(1, True), (2, False)])
 
-    def test_insert_returning(self, connection):
-        result = connection.execute(
-            table.insert().returning(table.c.id), {"persons": 1, "full": False}
+    def test_insert_returning(self):
+        result = (
+            table.insert()
+            .returning(table.c.id)
+            .execute({"persons": 1, "full": False})
         )
 
         eq_(result.fetchall(), [(1,)])
 
     @testing.requires.multivalues_inserts
-    def test_multirow_returning(self, connection):
+    def test_multirow_returning(self):
         ins = (
             table.insert()
             .returning(table.c.id, table.c.persons)
@@ -149,11 +155,11 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
                 ]
             )
         )
-        result = connection.execute(ins)
+        result = testing.db.execute(ins)
         eq_(result.fetchall(), [(1, 1), (2, 2), (3, 3)])
 
-    def test_no_ipk_on_returning(self, connection):
-        result = connection.execute(
+    def test_no_ipk_on_returning(self):
+        result = testing.db.execute(
             table.insert().returning(table.c.id), {"persons": 1, "full": False}
         )
         assert_raises_message(
@@ -177,19 +183,18 @@ class ReturningTest(fixtures.TestBase, AssertsExecutionResults):
         )
         eq_([dict(row._mapping) for row in result4], [{"persons": 10}])
 
-    def test_delete_returning(self, connection):
-        connection.execute(
-            table.insert(),
-            [{"persons": 5, "full": False}, {"persons": 3, "full": False}],
+    def test_delete_returning(self):
+        table.insert().execute(
+            [{"persons": 5, "full": False}, {"persons": 3, "full": False}]
         )
 
-        result = connection.execute(
-            table.delete(table.c.persons > 4).returning(table.c.id)
+        result = (
+            table.delete(table.c.persons > 4).returning(table.c.id).execute()
         )
         eq_(result.fetchall(), [(1,)])
 
-        result2 = connection.execute(
-            select([table.c.id, table.c.full]).order_by(table.c.id)
+        result2 = (
+            select([table.c.id, table.c.full]).order_by(table.c.id).execute()
         )
         eq_(result2.fetchall(), [(2, False)])
 
@@ -199,7 +204,7 @@ class CompositeStatementTest(fixtures.TestBase):
     __backend__ = True
 
     @testing.provide_metadata
-    def test_select_doesnt_pollute_result(self, connection):
+    def test_select_doesnt_pollute_result(self):
         class MyType(TypeDecorator):
             impl = Integer
 
@@ -210,17 +215,18 @@ class CompositeStatementTest(fixtures.TestBase):
 
         t2 = Table("t2", self.metadata, Column("x", Integer))
 
-        self.metadata.create_all(connection)
-        connection.execute(t1.insert().values(x=5))
+        self.metadata.create_all(testing.db)
+        with testing.db.connect() as conn:
+            conn.execute(t1.insert().values(x=5))
 
-        stmt = (
-            t2.insert()
-            .values(x=select([t1.c.x]).scalar_subquery())
-            .returning(t2.c.x)
-        )
+            stmt = (
+                t2.insert()
+                .values(x=select([t1.c.x]).scalar_subquery())
+                .returning(t2.c.x)
+            )
 
-        result = connection.execute(stmt)
-        eq_(result.scalar(), 5)
+            result = conn.execute(stmt)
+            eq_(result.scalar(), 5)
 
 
 class SequenceReturningTest(fixtures.TestBase):
@@ -234,25 +240,18 @@ class SequenceReturningTest(fixtures.TestBase):
         table = Table(
             "tables",
             meta,
-            Column("id", Integer, seq, primary_key=True,),
+            Column("id", Integer, seq, primary_key=True),
             Column("data", String(50)),
         )
-        with testing.db.connect() as conn:
-            table.create(conn, checkfirst=True)
+        table.create(checkfirst=True)
 
     def teardown(self):
-        with testing.db.connect() as conn:
-            table.drop(conn)
+        table.drop()
 
-    def test_insert(self, connection):
-        r = connection.execute(
-            table.insert().values(data="hi").returning(table.c.id)
-        )
-        eq_(r.first(), tuple([testing.db.dialect.default_sequence_base]))
-        eq_(
-            connection.execute(seq),
-            testing.db.dialect.default_sequence_base + 1,
-        )
+    def test_insert(self):
+        r = table.insert().values(data="hi").returning(table.c.id).execute()
+        assert r.first() == (1,)
+        assert seq.execute() == 2
 
 
 class KeyReturningTest(fixtures.TestBase, AssertsExecutionResults):
@@ -278,23 +277,21 @@ class KeyReturningTest(fixtures.TestBase, AssertsExecutionResults):
             ),
             Column("data", String(20)),
         )
-        with testing.db.connect() as conn:
-            table.create(conn, checkfirst=True)
+        table.create(checkfirst=True)
 
     def teardown(self):
-        with testing.db.connect() as conn:
-            table.drop(conn)
+        table.drop()
 
     @testing.exclude("firebird", "<", (2, 0), "2.0+ feature")
     @testing.exclude("postgresql", "<", (8, 2), "8.2+ feature")
-    def test_insert(self, connection):
-        result = connection.execute(
-            table.insert().returning(table.c.foo_id), data="somedata"
+    def test_insert(self):
+        result = (
+            table.insert().returning(table.c.foo_id).execute(data="somedata")
         )
         row = result.first()._mapping
         assert row[table.c.foo_id] == row["id"] == 1
 
-        result = connection.execute(table.select()).first()._mapping
+        result = table.select().execute().first()._mapping
         assert row[table.c.foo_id] == row["id"] == 1
 
 
@@ -328,9 +325,9 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             Column("upddef", Integer, onupdate=IncDefault()),
         )
 
-    def test_chained_insert_pk(self, connection):
+    def test_chained_insert_pk(self):
         t1 = self.tables.t1
-        result = connection.execute(
+        result = testing.db.execute(
             t1.insert().values(upddef=1).return_defaults(t1.c.insdef)
         )
         eq_(
@@ -341,9 +338,9 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             [1, 0],
         )
 
-    def test_arg_insert_pk(self, connection):
+    def test_arg_insert_pk(self):
         t1 = self.tables.t1
-        result = connection.execute(
+        result = testing.db.execute(
             t1.insert(return_defaults=[t1.c.insdef]).values(upddef=1)
         )
         eq_(
@@ -354,32 +351,32 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             [1, 0],
         )
 
-    def test_chained_update_pk(self, connection):
+    def test_chained_update_pk(self):
         t1 = self.tables.t1
-        connection.execute(t1.insert().values(upddef=1))
-        result = connection.execute(
+        testing.db.execute(t1.insert().values(upddef=1))
+        result = testing.db.execute(
             t1.update().values(data="d1").return_defaults(t1.c.upddef)
         )
         eq_(
             [result.returned_defaults._mapping[k] for k in (t1.c.upddef,)], [1]
         )
 
-    def test_arg_update_pk(self, connection):
+    def test_arg_update_pk(self):
         t1 = self.tables.t1
-        connection.execute(t1.insert().values(upddef=1))
-        result = connection.execute(
+        testing.db.execute(t1.insert().values(upddef=1))
+        result = testing.db.execute(
             t1.update(return_defaults=[t1.c.upddef]).values(data="d1")
         )
         eq_(
             [result.returned_defaults._mapping[k] for k in (t1.c.upddef,)], [1]
         )
 
-    def test_insert_non_default(self, connection):
+    def test_insert_non_default(self):
         """test that a column not marked at all as a
         default works with this feature."""
 
         t1 = self.tables.t1
-        result = connection.execute(
+        result = testing.db.execute(
             t1.insert().values(upddef=1).return_defaults(t1.c.data)
         )
         eq_(
@@ -390,13 +387,13 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             [1, None],
         )
 
-    def test_update_non_default(self, connection):
+    def test_update_non_default(self):
         """test that a column not marked at all as a
         default works with this feature."""
 
         t1 = self.tables.t1
-        connection.execute(t1.insert().values(upddef=1))
-        result = connection.execute(
+        testing.db.execute(t1.insert().values(upddef=1))
+        result = testing.db.execute(
             t1.update().values(upddef=2).return_defaults(t1.c.data)
         )
         eq_(
@@ -404,9 +401,9 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             [None],
         )
 
-    def test_insert_non_default_plus_default(self, connection):
+    def test_insert_non_default_plus_default(self):
         t1 = self.tables.t1
-        result = connection.execute(
+        result = testing.db.execute(
             t1.insert()
             .values(upddef=1)
             .return_defaults(t1.c.data, t1.c.insdef)
@@ -416,10 +413,10 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             {"id": 1, "data": None, "insdef": 0},
         )
 
-    def test_update_non_default_plus_default(self, connection):
+    def test_update_non_default_plus_default(self):
         t1 = self.tables.t1
-        connection.execute(t1.insert().values(upddef=1))
-        result = connection.execute(
+        testing.db.execute(t1.insert().values(upddef=1))
+        result = testing.db.execute(
             t1.update()
             .values(insdef=2)
             .return_defaults(t1.c.data, t1.c.upddef)
@@ -429,9 +426,9 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             {"data": None, "upddef": 1},
         )
 
-    def test_insert_all(self, connection):
+    def test_insert_all(self):
         t1 = self.tables.t1
-        result = connection.execute(
+        result = testing.db.execute(
             t1.insert().values(upddef=1).return_defaults()
         )
         eq_(
@@ -439,10 +436,10 @@ class ReturnDefaultsTest(fixtures.TablesTest):
             {"id": 1, "data": None, "insdef": 0},
         )
 
-    def test_update_all(self, connection):
+    def test_update_all(self):
         t1 = self.tables.t1
-        connection.execute(t1.insert().values(upddef=1))
-        result = connection.execute(
+        testing.db.execute(t1.insert().values(upddef=1))
+        result = testing.db.execute(
             t1.update().values(insdef=2).return_defaults()
         )
         eq_(dict(result.returned_defaults._mapping), {"upddef": 1})

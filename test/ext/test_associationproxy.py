@@ -24,6 +24,7 @@ from sqlalchemy.orm import create_session
 from sqlalchemy.orm import mapper
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.collections import attribute_mapped_collection
 from sqlalchemy.orm.collections import collection
 from sqlalchemy.testing import assert_raises
@@ -1620,7 +1621,7 @@ class ComparatorTest(fixtures.MappedTest, AssertsCompiledSQL):
         )
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         UserKeyword, User, Keyword, Singular = (
             cls.classes.UserKeyword,
             cls.classes.User,
@@ -1628,7 +1629,7 @@ class ComparatorTest(fixtures.MappedTest, AssertsCompiledSQL):
             cls.classes.Singular,
         )
 
-        session = Session(connection)
+        session = sessionmaker()()
         words = ("quick", "brown", "fox", "jumped", "over", "the", "lazy")
         for ii in range(16):
             user = User("user%d" % ii)
@@ -1655,9 +1656,7 @@ class ComparatorTest(fixtures.MappedTest, AssertsCompiledSQL):
         session.commit()
         cls.u = user
         cls.kw = user.keywords[0]
-
-        # TODO: this is not the correct pattern, use session per test
-        cls.session = Session(testing.db)
+        cls.session = session
 
     def _equivalent(self, q_proxy, q_direct):
         proxy_sql = q_proxy.statement.compile(dialect=default.DefaultDialect())
@@ -3448,10 +3447,10 @@ class ScopeBehaviorTest(fixtures.DeclarativeMappedTest):
             data = Column(String(50))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
 
-        s = Session(connection)
+        s = Session(testing.db)
         s.add_all(
             [
                 A(id=1, bs=[B(data="b1"), B(data="b2")]),

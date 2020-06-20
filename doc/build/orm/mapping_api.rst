@@ -1,4 +1,4 @@
-.. currentmodule:: sqlalchemy.orm
+.. module:: sqlalchemy.orm
 
 Class Mapping API
 =================
@@ -15,8 +15,8 @@ Class Mapping API
 
 .. autofunction:: sqlalchemy.orm.util.identity_key
 
-.. autofunction:: polymorphic_union
+.. autofunction:: sqlalchemy.orm.util.polymorphic_union
 
-.. autoclass:: Mapper
+.. autoclass:: sqlalchemy.orm.mapper.Mapper
    :members:
 

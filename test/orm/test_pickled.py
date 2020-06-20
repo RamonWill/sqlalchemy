@@ -495,11 +495,9 @@ class PickleTest(fixtures.MappedTest):
             sa.orm.defer(User.name),
             sa.orm.joinedload("addresses").joinedload(Address.dingaling),
         ]:
-            context = sess.query(User).options(opt)._compile_context()
+            q = sess.query(User).options(opt)
             opt = [
-                v
-                for v in context.attributes.values()
-                if isinstance(v, sa.orm.Load)
+                v for v in q._attributes.values() if isinstance(v, sa.orm.Load)
             ][0]
 
             opt2 = pickle.loads(pickle.dumps(opt))
@@ -769,7 +767,7 @@ class TupleLabelTest(_fixtures.FixtureTest):
                 eq_(row.name, row[0])
                 eq_(row.foobar, row[1])
 
-            for row in sess.query(User).with_entities(
+            for row in sess.query(User).values(
                 User.name, User.id.label("foobar")
             ):
                 if pickled is not False:

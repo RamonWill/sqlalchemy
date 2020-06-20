@@ -34,18 +34,6 @@ def setup_filters():
     # ignore 2.0 warnings unless we are explicitly testing for them
     warnings.filterwarnings("ignore", category=sa_exc.RemovedIn20Warning)
 
-    # ignore things that are deprecated *as of* 2.0 :)
-    warnings.filterwarnings(
-        "ignore",
-        category=sa_exc.SADeprecationWarning,
-        message=r".*\(deprecated since: 2.0\)$",
-    )
-    warnings.filterwarnings(
-        "ignore",
-        category=sa_exc.SADeprecationWarning,
-        message=r"^The (Sybase|firebird) dialect is deprecated and will be",
-    )
-
     try:
         import pytest
     except ImportError:

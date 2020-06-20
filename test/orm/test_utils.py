@@ -216,7 +216,6 @@ class AliasedClassTest(fixtures.TestBase, AssertsCompiledSQL):
         eq_(
             Point.x_alone._annotations,
             {
-                "entity_namespace": point_mapper,
                 "parententity": point_mapper,
                 "parentmapper": point_mapper,
                 "orm_key": "x_alone",
@@ -225,7 +224,6 @@ class AliasedClassTest(fixtures.TestBase, AssertsCompiledSQL):
         eq_(
             Point.x._annotations,
             {
-                "entity_namespace": point_mapper,
                 "parententity": point_mapper,
                 "parentmapper": point_mapper,
                 "orm_key": "x",

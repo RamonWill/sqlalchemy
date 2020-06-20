@@ -47,17 +47,6 @@ class SpecificIntegrityError(WrongNameError):
 
 
 class WrapTest(fixtures.TestBase):
-    def test_version_token(self):
-        assert sa_exceptions._version_token in (
-            "13",
-            "14",
-            "15",
-            "16",
-            "20",
-            "21",
-            "22",
-        )
-
     def _translating_dialect_fixture(self):
         d = default.DefaultDialect()
         d.dbapi_exception_translation_map = {
@@ -83,8 +72,7 @@ class WrapTest(fixtures.TestBase):
                 str(exc),
                 "(test.base.test_except.OperationalError) \n"
                 "[SQL: this is a message]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
 
     def test_tostring_with_newlines(self):
@@ -101,8 +89,7 @@ class WrapTest(fixtures.TestBase):
                 "(test.base.test_except.OperationalError) \n"
                 "[SQL: this is a message\nthis is the next line\n"
                 "the last line]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
 
     def test_statement_error_no_code(self):
@@ -135,8 +122,7 @@ class WrapTest(fixtures.TestBase):
                 "(sqlalchemy.exc.InvalidRequestError) hello\n"
                 "[SQL: select * from table]\n"
                 "[parameters: [{'x': 1}]]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/abcd)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/abcd)",
             )
             eq_(err.args, ("(sqlalchemy.exc.InvalidRequestError) hello",))
 
@@ -147,8 +133,7 @@ class WrapTest(fixtures.TestBase):
         eq_(
             str(orig),
             "(2006, 'Test raise operational error')\n"
-            "(Background on this error at: http://sqlalche.me/e/%s/dbapi)"
-            % sa_exceptions._version_token,
+            "(Background on this error at: http://sqlalche.me/e/dbapi)",
         )
 
     def test_wrap_unicode_arg(self):
@@ -159,7 +144,7 @@ class WrapTest(fixtures.TestBase):
             compat.text_type(orig),
             compat.u(
                 "méil\n(Background on this error at: "
-                "http://sqlalche.me/e/%s/dbapi)" % sa_exceptions._version_token
+                "http://sqlalche.me/e/dbapi)"
             ),
         )
         eq_(orig.args, (u("méil"),))
@@ -232,8 +217,7 @@ class WrapTest(fixtures.TestBase):
                 "[SQL: this is a message]\n"
                 "[parameters: [{1: 1}, {1: 1}, {1: 1}, {1: 1}, {1: 1},"
                 " {1: 1}, {1: 1}, {1: 1}, {1: 1}, {1: 1}]]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
             eq_(
                 exc.args,
@@ -268,8 +252,7 @@ class WrapTest(fixtures.TestBase):
                 "{1: 1}, {1: 1}, {1: 1}, {1: 1}, {1: 1}, "
                 "{1: 1}, {1: 1}  ... displaying 10 of 11 total "
                 "bound parameter sets ...  {1: 1}, {1: 1}]]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
         try:
             raise sa_exceptions.DBAPIError.instance(
@@ -286,8 +269,7 @@ class WrapTest(fixtures.TestBase):
                 "[SQL: this is a message]\n"
                 "[parameters: [(1,), "
                 "(1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,), (1,)]]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
         try:
             raise sa_exceptions.DBAPIError.instance(
@@ -318,8 +300,7 @@ class WrapTest(fixtures.TestBase):
                 "(1,), (1,), (1,), (1,), (1,), (1,), (1,)  "
                 "... displaying 10 of 11 total bound "
                 "parameter sets ...  (1,), (1,)]]\n"
-                "(Background on this error at: http://sqlalche.me/e/%s/e3q8)"
-                % sa_exceptions._version_token,
+                "(Background on this error at: http://sqlalche.me/e/e3q8)",
             )
 
     def test_db_error_busted_dbapi(self):

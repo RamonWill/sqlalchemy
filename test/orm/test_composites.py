@@ -4,13 +4,12 @@ from sqlalchemy import Integer
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
-from sqlalchemy import update
-from sqlalchemy.future import select as future_select
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import composite
 from sqlalchemy.orm import CompositeProperty
 from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import mapper
+from sqlalchemy.orm import persistence
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
 from sqlalchemy.testing import assert_raises_message
@@ -232,20 +231,17 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
 
         sess = self._fixture()
 
-        e1 = sess.execute(
-            future_select(Edge).filter(Edge.start == Point(14, 5))
-        ).scalar_one()
+        e1 = sess.query(Edge).filter(Edge.start == Point(14, 5)).one()
 
         eq_(e1.end, Point(2, 7))
 
-        stmt = (
-            update(Edge)
-            .filter(Edge.start == Point(14, 5))
-            .values({Edge.end: Point(16, 10)})
+        q = sess.query(Edge).filter(Edge.start == Point(14, 5))
+        bulk_ud = persistence.BulkUpdate.factory(
+            q, False, {Edge.end: Point(16, 10)}, {}
         )
 
         self.assert_compile(
-            stmt,
+            bulk_ud,
             "UPDATE edges SET x2=:x2, y2=:y2 WHERE edges.x1 = :x1_1 "
             "AND edges.y1 = :y1_1",
             params={"x2": 16, "x1_1": 14, "y2": 10, "y1_1": 5},
@@ -257,18 +253,12 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
 
         sess = self._fixture()
 
-        e1 = sess.execute(
-            future_select(Edge).filter(Edge.start == Point(14, 5))
-        ).scalar_one()
+        e1 = sess.query(Edge).filter(Edge.start == Point(14, 5)).one()
 
         eq_(e1.end, Point(2, 7))
 
-        stmt = (
-            update(Edge)
-            .filter(Edge.start == Point(14, 5))
-            .values({Edge.end: Point(16, 10)})
-        )
-        sess.execute(stmt)
+        q = sess.query(Edge).filter(Edge.start == Point(14, 5))
+        q.update({Edge.end: Point(16, 10)})
 
         eq_(e1.end, Point(16, 10))
 

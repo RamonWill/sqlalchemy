@@ -29,7 +29,6 @@ from sqlalchemy import exc
 from sqlalchemy import except_
 from sqlalchemy import exists
 from sqlalchemy import Float
-from sqlalchemy import ForeignKey
 from sqlalchemy import func
 from sqlalchemy import Integer
 from sqlalchemy import intersect
@@ -71,11 +70,9 @@ from sqlalchemy.engine import default
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import column
 from sqlalchemy.sql import compiler
-from sqlalchemy.sql import elements
 from sqlalchemy.sql import label
 from sqlalchemy.sql import operators
 from sqlalchemy.sql import table
-from sqlalchemy.sql import util as sql_util
 from sqlalchemy.sql.elements import BooleanClauseList
 from sqlalchemy.sql.expression import ClauseList
 from sqlalchemy.sql.expression import HasPrefixes
@@ -86,10 +83,8 @@ from sqlalchemy.testing import eq_
 from sqlalchemy.testing import eq_ignore_whitespace
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
-from sqlalchemy.testing import is_true
-from sqlalchemy.testing import mock
-from sqlalchemy.testing import ne_
 from sqlalchemy.util import u
+
 
 table1 = table(
     "mytable",
@@ -128,13 +123,6 @@ table5 = Table(
     schema="dbo.remote_owner",
 )
 
-parent = Table("parent", metadata, Column("id", Integer, primary_key=True))
-child = Table(
-    "child",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("parent_id", ForeignKey("parent.id")),
-)
 users = table(
     "users", column("user_id"), column("user_name"), column("password")
 )
@@ -1473,13 +1461,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
             select([func.count(distinct(table1.c.myid))]),
             "SELECT count(DISTINCT mytable.myid) AS count_1 FROM mytable",
         )
-
-    def test_distinct_on(self):
-        with testing.expect_deprecated(
-            "DISTINCT ON is currently supported only by the PostgreSQL "
-            "dialect"
-        ):
-            select(["*"]).distinct(table1.c.myid).compile()
 
     def test_where_empty(self):
         self.assert_compile(
@@ -3298,29 +3279,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
             checkparams={"3foo_1": "foo", "4_foo_1": "bar"},
         )
 
-    def test_bind_given_anon_name_dont_double(self):
-        c = column("id")
-        l = c.label(None)
-
-        # new case as of Id810f485c5f7ed971529489b84694e02a3356d6d
-        subq = select([l]).subquery()
-
-        # this creates a ColumnClause as a proxy to the Label() that has
-        # an anoymous name, so the column has one too.
-        anon_col = subq.c[0]
-        assert isinstance(anon_col.name, elements._anonymous_label)
-
-        # then when BindParameter is created, it checks the label
-        # and doesn't double up on the anonymous name which is uncachable
-        expr = anon_col > 5
-
-        self.assert_compile(
-            expr, "anon_1.id_1 > :param_1", checkparams={"param_1": 5}
-        )
-
-        # see also test_compare.py -> _statements_w_anonymous_col_names
-        # fixture for cache key
-
     def test_bind_as_col(self):
         t = table("foo", column("id"))
 
@@ -3494,140 +3452,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
             "extracted_parameters to construct_params",
             s1_compiled_no_cache_key.construct_params,
             extracted_parameters=s1_cache_key[1],
-        )
-
-    def test_construct_params_w_bind_clones_post(self):
-        """test that a BindParameter that has been cloned after the cache
-        key was generated still matches up when construct_params()
-        is called with an extracted parameter collection.
-
-        This case occurs now with the ORM as the ORM construction will
-        frequently run clause adaptation on elements of the statement within
-        compilation, after the cache key has been generated.  this adaptation
-        hits BindParameter objects which will change their key as they
-        will usually have unqique=True.   So the construct_params() process
-        when it links its internal bind_names to the cache key binds,
-        must do this badsed on bindparam._identifying_key, which does not
-        change across clones, rather than .key which usually will.
-
-        """
-
-        stmt = select([table1.c.myid]).where(table1.c.myid == 5)
-
-        # get the original bindparam.
-        original_bind = stmt._where_criteria[0].right
-
-        # it's anonymous so unique=True
-        is_true(original_bind.unique)
-
-        # cache key against hte original param
-        cache_key = stmt._generate_cache_key()
-
-        # now adapt the statement
-        stmt_adapted = sql_util.ClauseAdapter(table1).traverse(stmt)
-
-        # new bind parameter has a different key but same
-        # identifying key
-        new_bind = stmt_adapted._where_criteria[0].right
-        eq_(original_bind._identifying_key, new_bind._identifying_key)
-        ne_(original_bind.key, new_bind.key)
-
-        # compile the adapted statement but set the cache key to the one
-        # generated from the unadapted statement.  this will look like
-        # when the ORM runs clause adaption inside of visit_select, after
-        # the cache key is generated but before the compiler is given the
-        # core select statement to actually render.
-        compiled = stmt_adapted.compile(cache_key=cache_key)
-
-        # params set up as 5
-        eq_(compiled.construct_params(params={},), {"myid_1": 5})
-
-        # also works w the original cache key
-        eq_(
-            compiled.construct_params(
-                params={}, extracted_parameters=cache_key[1]
-            ),
-            {"myid_1": 5},
-        )
-
-        # now make a totally new statement with the same cache key
-        new_stmt = select([table1.c.myid]).where(table1.c.myid == 10)
-        new_cache_key = new_stmt._generate_cache_key()
-
-        # cache keys match
-        eq_(cache_key.key, new_cache_key.key)
-
-        # ensure we get "10" from construct params.   if it matched
-        # based on .key and not ._identifying_key, it would not see that
-        # the bind parameter is part of the cache key.
-        eq_(
-            compiled.construct_params(
-                params={}, extracted_parameters=new_cache_key[1]
-            ),
-            {"myid_1": 10},
-        )
-
-    def test_construct_params_w_bind_clones_pre(self):
-        """test that a BindParameter that has been cloned before the cache
-        key was generated, and was doubled up just to make sure it has to
-        be unique, still matches up when construct_params()
-        is called with an extracted parameter collection.
-
-        other ORM feaures like optimized_compare() end up doing something
-        like this, such as if there are multiple "has()" or "any()" which would
-        have cloned the join condition and changed the values of bound
-        parameters.
-
-        """
-
-        stmt = select([table1.c.myid]).where(table1.c.myid == 5)
-
-        original_bind = stmt._where_criteria[0].right
-        # it's anonymous so unique=True
-        is_true(original_bind.unique)
-
-        b1 = original_bind._clone()
-        b1.value = 10
-        b2 = original_bind._clone()
-        b2.value = 12
-
-        # make a new statement that uses the clones as distinct
-        # parameters
-        modified_stmt = select([table1.c.myid]).where(
-            or_(table1.c.myid == b1, table1.c.myid == b2)
-        )
-
-        cache_key = modified_stmt._generate_cache_key()
-        compiled = modified_stmt.compile(cache_key=cache_key)
-
-        eq_(
-            compiled.construct_params(params={}), {"myid_1": 10, "myid_2": 12},
-        )
-
-        # make a new statement doing the same thing and make sure
-        # the binds match up correctly
-        new_stmt = select([table1.c.myid]).where(table1.c.myid == 8)
-
-        new_original_bind = new_stmt._where_criteria[0].right
-        new_b1 = new_original_bind._clone()
-        new_b1.value = 20
-        new_b2 = new_original_bind._clone()
-        new_b2.value = 18
-        modified_new_stmt = select([table1.c.myid]).where(
-            or_(table1.c.myid == new_b1, table1.c.myid == new_b2)
-        )
-
-        new_cache_key = modified_new_stmt._generate_cache_key()
-
-        # cache keys match
-        eq_(cache_key.key, new_cache_key.key)
-
-        # ensure we get both values
-        eq_(
-            compiled.construct_params(
-                params={}, extracted_parameters=new_cache_key[1]
-            ),
-            {"myid_1": 20, "myid_2": 18},
         )
 
     def test_tuple_expanding_in_no_values(self):
@@ -4047,41 +3871,6 @@ class StringifySpecialTest(fixtures.TestBase):
             "'%s'" % value,
         )
 
-    def test_with_hint_table(self):
-        stmt = (
-            select([table1])
-            .select_from(
-                table1.join(table2, table1.c.myid == table2.c.otherid)
-            )
-            .with_hint(table1, "use some_hint")
-        )
-
-        # note that some dialects instead use the "with_select_hint"
-        # hook to put the 'hint' up front
-        eq_ignore_whitespace(
-            str(stmt),
-            "SELECT mytable.myid, mytable.name, mytable.description "
-            "FROM mytable [use some_hint] "
-            "JOIN myothertable ON mytable.myid = myothertable.otherid",
-        )
-
-    def test_with_hint_statement(self):
-        stmt = (
-            select([table1])
-            .select_from(
-                table1.join(table2, table1.c.myid == table2.c.otherid)
-            )
-            .with_statement_hint("use some_hint")
-        )
-
-        eq_ignore_whitespace(
-            str(stmt),
-            "SELECT mytable.myid, mytable.name, mytable.description "
-            "FROM mytable "
-            "JOIN myothertable ON mytable.myid = myothertable.otherid "
-            "use some_hint",
-        )
-
 
 class KwargPropagationTest(fixtures.TestBase):
     @classmethod
@@ -4341,19 +4130,19 @@ class DDLTest(fixtures.TestBase, AssertsCompiledSQL):
 
         self.assert_compile(
             schema.CreateSequence(s1),
-            "CREATE SEQUENCE [SCHEMA__none].s1 START WITH 1",
+            "CREATE SEQUENCE [SCHEMA__none].s1",
             schema_translate_map=schema_translate_map,
         )
 
         self.assert_compile(
             schema.CreateSequence(s2),
-            "CREATE SEQUENCE [SCHEMA_foo].s2 START WITH 1",
+            "CREATE SEQUENCE [SCHEMA_foo].s2",
             schema_translate_map=schema_translate_map,
         )
 
         self.assert_compile(
             schema.CreateSequence(s3),
-            "CREATE SEQUENCE [SCHEMA_bar].s3 START WITH 1",
+            "CREATE SEQUENCE [SCHEMA_bar].s3",
             schema_translate_map=schema_translate_map,
         )
 
@@ -4650,80 +4439,6 @@ class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):
             "INSERT INTO remote_owner.remotetable "
             "(rem_id, datatype_id, value) VALUES "
             "(:rem_id, :datatype_id, :value)",
-        )
-
-    def test_schema_lowercase_select(self):
-        # test that "schema" works correctly when passed to table
-        t1 = table("foo", column("a"), column("b"), schema="bar")
-        self.assert_compile(
-            select([t1]).select_from(t1),
-            "SELECT bar.foo.a, bar.foo.b FROM bar.foo",
-        )
-
-    def test_schema_lowercase_select_alias(self):
-        # test alias behavior
-        t1 = table("foo", schema="bar")
-        self.assert_compile(
-            select(["*"]).select_from(t1.alias("t")),
-            "SELECT * FROM bar.foo AS t",
-        )
-
-    def test_schema_lowercase_select_labels(self):
-        # test "schema" with extended_labels
-        t1 = table(
-            "baz",
-            column("id", Integer),
-            column("name", String),
-            column("meta", String),
-            schema="here",
-        )
-
-        self.assert_compile(
-            select([t1]).select_from(t1).apply_labels(),
-            "SELECT here.baz.id AS here_baz_id, here.baz.name AS "
-            "here_baz_name, here.baz.meta AS here_baz_meta FROM here.baz",
-        )
-
-    def test_schema_lowercase_select_subquery(self):
-        # test schema plays well with subqueries
-        t1 = table(
-            "yetagain",
-            column("anotherid", Integer),
-            column("anothername", String),
-            schema="here",
-        )
-        s = (
-            text("select id, name from user")
-            .columns(id=Integer, name=String)
-            .subquery()
-        )
-        stmt = select([t1.c.anotherid]).select_from(
-            t1.join(s, t1.c.anotherid == s.c.id)
-        )
-        compiled = stmt.compile()
-        eq_(
-            compiled._create_result_map(),
-            {
-                "anotherid": (
-                    "anotherid",
-                    (
-                        t1.c.anotherid,
-                        "anotherid",
-                        "anotherid",
-                        "here_yetagain_anotherid",
-                    ),
-                    t1.c.anotherid.type,
-                )
-            },
-        )
-
-    def test_schema_lowercase_invalid(self):
-        assert_raises_message(
-            exc.ArgumentError,
-            r"Unsupported argument\(s\): \['not_a_schema'\]",
-            table,
-            "foo",
-            not_a_schema="bar",
         )
 
 
@@ -5298,7 +5013,7 @@ class ResultMapTest(fixtures.TestBase):
         )
 
     def test_nested_api(self):
-        from sqlalchemy.engine.cursor import CursorResultMetaData
+        from sqlalchemy.engine.result import CursorResultMetaData
 
         stmt2 = select([table2]).subquery()
 
@@ -5395,16 +5110,9 @@ class ResultMapTest(fixtures.TestBase):
 
         wrapped_again = select([c for c in wrapped.c])
 
-        dialect = default.DefaultDialect()
-
-        with mock.patch.object(
-            dialect.statement_compiler,
-            "translate_select_structure",
-            lambda self, to_translate, **kw: wrapped_again
-            if to_translate is stmt
-            else to_translate,
-        ):
-            compiled = stmt.compile(dialect=dialect)
+        compiled = wrapped_again.compile(
+            compile_kwargs={"select_wraps_for": stmt}
+        )
 
         proxied = [obj[0] for (k, n, obj, type_) in compiled._result_columns]
         for orig_obj, proxied_obj in zip(orig, proxied):
@@ -5429,14 +5137,7 @@ class ResultMapTest(fixtures.TestBase):
         eq_(len(stmt.subquery().c), 7)
 
         # will render 7 as well
-        eq_(
-            len(
-                stmt._compile_state_factory(
-                    stmt, stmt.compile()
-                ).columns_plus_names
-            ),
-            7,
-        )
+        eq_(len(stmt._compile_state_factory(stmt, None).columns_plus_names), 7)
 
         wrapped = stmt._generate()
         wrapped = wrapped.add_columns(
@@ -5449,17 +5150,9 @@ class ResultMapTest(fixtures.TestBase):
         # so the compiler logic that matches up the "wrapper" to the
         # "select_wraps_for" can't use inner_columns to match because
         # these collections are not the same
-
-        dialect = default.DefaultDialect()
-
-        with mock.patch.object(
-            dialect.statement_compiler,
-            "translate_select_structure",
-            lambda self, to_translate, **kw: wrapped_again
-            if to_translate is stmt
-            else to_translate,
-        ):
-            compiled = stmt.compile(dialect=dialect)
+        compiled = wrapped_again.compile(
+            compile_kwargs={"select_wraps_for": stmt}
+        )
 
         proxied = [obj[0] for (k, n, obj, type_) in compiled._result_columns]
         for orig_obj, proxied_obj in zip(orig, proxied):

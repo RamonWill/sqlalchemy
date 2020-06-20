@@ -9,6 +9,7 @@ from sqlalchemy import exc
 from sqlalchemy import sql
 from sqlalchemy import testing
 from sqlalchemy import util
+from sqlalchemy.engine import result
 from sqlalchemy.sql import column
 from sqlalchemy.sql.base import DedupeColumnCollection
 from sqlalchemy.testing import assert_raises
@@ -30,6 +31,144 @@ from sqlalchemy.util import get_callable_argspec
 from sqlalchemy.util import langhelpers
 from sqlalchemy.util import timezone
 from sqlalchemy.util import WeakSequence
+
+
+class _KeyedTupleTest(object):
+    def _fixture(self, values, labels):
+        raise NotImplementedError()
+
+    def test_empty(self):
+        keyed_tuple = self._fixture([], [])
+        eq_(str(keyed_tuple), "()")
+        eq_(len(keyed_tuple), 0)
+
+        eq_(list(keyed_tuple._mapping.keys()), [])
+        eq_(keyed_tuple._fields, ())
+        eq_(keyed_tuple._asdict(), {})
+
+    def test_values_none_labels(self):
+        keyed_tuple = self._fixture([1, 2], [None, None])
+        eq_(str(keyed_tuple), "(1, 2)")
+        eq_(len(keyed_tuple), 2)
+
+        eq_(list(keyed_tuple._mapping.keys()), [])
+        eq_(keyed_tuple._fields, ())
+        eq_(keyed_tuple._asdict(), {})
+
+        eq_(keyed_tuple[0], 1)
+        eq_(keyed_tuple[1], 2)
+
+    def test_creation(self):
+        keyed_tuple = self._fixture([1, 2], ["a", "b"])
+        eq_(str(keyed_tuple), "(1, 2)")
+        eq_(list(keyed_tuple._mapping.keys()), ["a", "b"])
+        eq_(keyed_tuple._fields, ("a", "b"))
+        eq_(keyed_tuple._asdict(), {"a": 1, "b": 2})
+
+    def test_index_access(self):
+        keyed_tuple = self._fixture([1, 2], ["a", "b"])
+        eq_(keyed_tuple[0], 1)
+        eq_(keyed_tuple[1], 2)
+
+        def should_raise():
+            keyed_tuple[2]
+
+        assert_raises(IndexError, should_raise)
+
+    def test_slice_access(self):
+        keyed_tuple = self._fixture([1, 2], ["a", "b"])
+        eq_(keyed_tuple[0:2], (1, 2))
+
+    def test_attribute_access(self):
+        keyed_tuple = self._fixture([1, 2], ["a", "b"])
+        eq_(keyed_tuple.a, 1)
+        eq_(keyed_tuple.b, 2)
+
+        def should_raise():
+            keyed_tuple.c
+
+        assert_raises(AttributeError, should_raise)
+
+    def test_contains(self):
+        keyed_tuple = self._fixture(["x", "y"], ["a", "b"])
+
+        is_true("x" in keyed_tuple)
+        is_false("z" in keyed_tuple)
+
+        is_true("z" not in keyed_tuple)
+        is_false("x" not in keyed_tuple)
+
+        # we don't do keys
+        is_false("a" in keyed_tuple)
+        is_false("z" in keyed_tuple)
+        is_true("a" not in keyed_tuple)
+        is_true("z" not in keyed_tuple)
+
+    def test_none_label(self):
+        keyed_tuple = self._fixture([1, 2, 3], ["a", None, "b"])
+        eq_(str(keyed_tuple), "(1, 2, 3)")
+
+        eq_(list(keyed_tuple._mapping.keys()), ["a", "b"])
+        eq_(keyed_tuple._fields, ("a", "b"))
+        eq_(keyed_tuple._asdict(), {"a": 1, "b": 3})
+
+        # attribute access: can't get at value 2
+        eq_(keyed_tuple.a, 1)
+        eq_(keyed_tuple.b, 3)
+
+        # index access: can get at value 2
+        eq_(keyed_tuple[0], 1)
+        eq_(keyed_tuple[1], 2)
+        eq_(keyed_tuple[2], 3)
+
+    def test_duplicate_labels(self):
+        keyed_tuple = self._fixture([1, 2, 3], ["a", "b", "b"])
+        eq_(str(keyed_tuple), "(1, 2, 3)")
+
+        eq_(list(keyed_tuple._mapping.keys()), ["a", "b", "b"])
+        eq_(keyed_tuple._fields, ("a", "b", "b"))
+        eq_(keyed_tuple._asdict(), {"a": 1, "b": 3})
+
+        # attribute access: can't get at value 2
+        eq_(keyed_tuple.a, 1)
+        eq_(keyed_tuple.b, 3)
+
+        # index access: can get at value 2
+        eq_(keyed_tuple[0], 1)
+        eq_(keyed_tuple[1], 2)
+        eq_(keyed_tuple[2], 3)
+
+    def test_immutable(self):
+        keyed_tuple = self._fixture([1, 2], ["a", "b"])
+        eq_(str(keyed_tuple), "(1, 2)")
+
+        eq_(keyed_tuple.a, 1)
+
+        # eh
+        # assert_raises(AttributeError, setattr, keyed_tuple, "a", 5)
+
+        def should_raise():
+            keyed_tuple[0] = 100
+
+        assert_raises(TypeError, should_raise)
+
+    def test_serialize(self):
+
+        keyed_tuple = self._fixture([1, 2, 3], ["a", None, "b"])
+
+        for loads, dumps in picklers():
+            kt = loads(dumps(keyed_tuple))
+
+            eq_(str(kt), "(1, 2, 3)")
+
+            eq_(list(kt._mapping.keys()), ["a", "b"])
+            eq_(kt._fields, ("a", "b"))
+            eq_(kt._asdict(), {"a": 1, "b": 3})
+
+
+class LWKeyedTupleTest(_KeyedTupleTest, fixtures.TestBase):
+    def _fixture(self, values, labels):
+        return result.result_tuple(labels)(values)
 
 
 class WeakSequenceTest(fixtures.TestBase):
@@ -141,100 +280,11 @@ class OrderedSetTest(fixtures.TestBase):
         eq_(o.union(iter([3, 4, 6])), util.OrderedSet([2, 3, 4, 5, 6]))
 
 
-class ImmutableDictTest(fixtures.TestBase):
-    def test_union_no_change(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.union({})
-
-        is_(d2, d)
-
-    def test_merge_with_no_change(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.merge_with({}, None)
-
-        eq_(d2, {1: 2, 3: 4})
-        is_(d2, d)
-
-    def test_merge_with_dicts(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.merge_with({3: 5, 7: 12}, {9: 18, 15: 25})
-
-        eq_(d, {1: 2, 3: 4})
-        eq_(d2, {1: 2, 3: 5, 7: 12, 9: 18, 15: 25})
-        assert isinstance(d2, util.immutabledict)
-
-        d3 = d.merge_with({17: 42})
-
-        eq_(d3, {1: 2, 3: 4, 17: 42})
-
-    def test_merge_with_tuples(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.merge_with([(3, 5), (7, 12)], [(9, 18), (15, 25)])
-
-        eq_(d, {1: 2, 3: 4})
-        eq_(d2, {1: 2, 3: 5, 7: 12, 9: 18, 15: 25})
-
-    def test_union_dictionary(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.union({3: 5, 7: 12})
-        assert isinstance(d2, util.immutabledict)
-
-        eq_(d, {1: 2, 3: 4})
-        eq_(d2, {1: 2, 3: 5, 7: 12})
-
-    def test_union_tuples(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        d2 = d.union([(3, 5), (7, 12)])
-
-        eq_(d, {1: 2, 3: 4})
-        eq_(d2, {1: 2, 3: 5, 7: 12})
-
-    def test_keys(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        eq_(set(d.keys()), {1, 3})
-
-    def test_values(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        eq_(set(d.values()), {2, 4})
-
-    def test_items(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        eq_(set(d.items()), {(1, 2), (3, 4)})
-
-    def test_contains(self):
-        d = util.immutabledict({1: 2, 3: 4})
-
-        assert 1 in d
-        assert "foo" not in d
-
-    def test_rich_compare(self):
-        d = util.immutabledict({1: 2, 3: 4})
-        d2 = util.immutabledict({1: 2, 3: 4})
-        d3 = util.immutabledict({5: 12})
-        d4 = {5: 12}
-
-        eq_(d, d2)
-        ne_(d, d3)
-        ne_(d, d4)
-        eq_(d3, d4)
-
+class FrozenDictTest(fixtures.TestBase):
     def test_serialize(self):
         d = util.immutabledict({1: 2, 3: 4})
         for loads, dumps in picklers():
-            d2 = loads(dumps(d))
-
-            eq_(d2, {1: 2, 3: 4})
-
-            assert isinstance(d2, util.immutabledict)
+            print(loads(dumps(d)))
 
 
 class MemoizedAttrTest(fixtures.TestBase):
@@ -1147,13 +1197,6 @@ class HashOverride(object):
         return hash(self.value)
 
 
-class NoHash(object):
-    def __init__(self, value=None):
-        self.value = value
-
-    __hash__ = None
-
-
 class EqOverride(object):
     def __init__(self, value=None):
         self.value = value
@@ -1194,8 +1237,6 @@ class HashEqOverride(object):
 
 
 class IdentitySetTest(fixtures.TestBase):
-    obj_type = object
-
     def assert_eq(self, identityset, expected_iterable):
         expected = sorted([id(o) for o in expected_iterable])
         found = sorted([id(o) for o in identityset])
@@ -1225,7 +1266,7 @@ class IdentitySetTest(fixtures.TestBase):
                 ids.add(data[i])
             self.assert_eq(ids, data)
 
-        for type_ in (NoHash, EqOverride, HashOverride, HashEqOverride):
+        for type_ in (EqOverride, HashOverride, HashEqOverride):
             data = [type_(1), type_(1), type_(2)]
             ids = util.IdentitySet()
             for i in list(range(3)) + list(range(3)):
@@ -1234,7 +1275,7 @@ class IdentitySetTest(fixtures.TestBase):
 
     def test_dunder_sub2(self):
         IdentitySet = util.IdentitySet
-        o1, o2, o3 = self.obj_type(), self.obj_type(), self.obj_type()
+        o1, o2, o3 = object(), object(), object()
         ids1 = IdentitySet([o1])
         ids2 = IdentitySet([o1, o2, o3])
         eq_(ids2 - ids1, IdentitySet([o2, o3]))
@@ -1647,13 +1688,7 @@ class IdentitySetTest(fixtures.TestBase):
         pass  # TODO
 
     def _create_sets(self):
-        o1, o2, o3, o4, o5 = (
-            self.obj_type(),
-            self.obj_type(),
-            self.obj_type(),
-            self.obj_type(),
-            self.obj_type(),
-        )
+        o1, o2, o3, o4, o5 = object(), object(), object(), object(), object()
         super_ = util.IdentitySet([o1, o2, o3])
         sub_ = util.IdentitySet([o2])
         twin1 = util.IdentitySet([o3])
@@ -1677,7 +1712,7 @@ class IdentitySetTest(fixtures.TestBase):
     def test_basic_sanity(self):
         IdentitySet = util.IdentitySet
 
-        o1, o2, o3 = self.obj_type(), self.obj_type(), self.obj_type()
+        o1, o2, o3 = object(), object(), object()
         ids = IdentitySet([o1])
         ids.discard(o1)
         ids.discard(o1)
@@ -1740,10 +1775,6 @@ class IdentitySetTest(fixtures.TestBase):
 
         assert_raises(TypeError, util.cmp, ids)
         assert_raises(TypeError, hash, ids)
-
-
-class NoHashIdentitySetTest(IdentitySetTest):
-    obj_type = NoHash
 
 
 class OrderedIdentitySetTest(fixtures.TestBase):

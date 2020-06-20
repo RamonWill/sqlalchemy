@@ -3,7 +3,6 @@
 """
 
 from .caching_query import FromCache
-from .environment import cache
 from .environment import Session
 from .model import Person
 
@@ -58,19 +57,10 @@ people_two_through_twelve = (
 # same list of objects to be loaded, and the same parameters in the
 # same order, then call invalidate().
 print("invalidating everything")
-
-cache.invalidate(Session.query(Person), {}, FromCache("default"))
-cache.invalidate(
-    Session.query(Person).filter(
-        Person.name.between("person 02", "person 12")
-    ),
-    {},
-    FromCache("default"),
-)
-cache.invalidate(
-    Session.query(Person).filter(
-        Person.name.between("person 05", "person 15")
-    ),
-    {},
-    FromCache("default", "people_on_range"),
-)
+Session.query(Person).options(FromCache("default")).invalidate()
+Session.query(Person).options(FromCache("default")).filter(
+    Person.name.between("person 02", "person 12")
+).invalidate()
+Session.query(Person).options(FromCache("default", "people_on_range")).filter(
+    Person.name.between("person 05", "person 15")
+).invalidate()

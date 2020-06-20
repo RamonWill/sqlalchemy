@@ -15,7 +15,6 @@ import platform
 import sys
 
 
-py37 = sys.version_info >= (3, 7)
 py36 = sys.version_info >= (3, 6)
 py3k = sys.version_info >= (3, 0)
 py2k = sys.version_info < (3, 0)
@@ -400,7 +399,7 @@ def reraise(tp, value, tb=None, cause=None):
     raise_(value, with_traceback=tb, from_=cause)
 
 
-def with_metaclass(meta, *bases, **kw):
+def with_metaclass(meta, *bases):
     """Create a base class with a metaclass.
 
     Drops the middle class upon creation.
@@ -415,15 +414,8 @@ def with_metaclass(meta, *bases, **kw):
 
         def __new__(cls, name, this_bases, d):
             if this_bases is None:
-                cls = type.__new__(cls, name, (), d)
-            else:
-                cls = meta(name, bases, d)
-
-            if hasattr(cls, "__init_subclass__") and hasattr(
-                cls.__init_subclass__, "__func__"
-            ):
-                cls.__init_subclass__.__func__(cls, **kw)
-            return cls
+                return type.__new__(cls, name, (), d)
+            return meta(name, bases, d)
 
     return metaclass("temporary_class", None, {})
 

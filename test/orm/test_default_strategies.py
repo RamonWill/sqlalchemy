@@ -259,7 +259,8 @@ class DefaultStrategyOptionsTest(_fixtures.FixtureTest):
         assert_raises_message(
             sa.exc.ArgumentError,
             "Wildcard token cannot be followed by another entity",
-            sess.query(User).options(opt)._compile_context,
+            sess.query(User).options,
+            opt,
         )
 
     def test_global_star_ignored_no_entities_unbound(self):

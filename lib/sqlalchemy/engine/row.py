@@ -14,6 +14,7 @@ from .. import util
 from ..sql import util as sql_util
 from ..util.compat import collections_abc
 
+
 MD_INDEX = 0  # integer index in cursor.description
 
 # This reconstructor is necessary so that pickles with the C extension or
@@ -39,11 +40,6 @@ except ImportError:
         return obj
 
 
-KEY_INTEGER_ONLY = 0
-KEY_OBJECTS_ONLY = 1
-KEY_OBJECTS_BUT_WARN = 2
-KEY_OBJECTS_NO_WARN = 3
-
 try:
     from sqlalchemy.cresultproxy import BaseRow
 
@@ -52,40 +48,25 @@ except ImportError:
     _baserow_usecext = False
 
     class BaseRow(object):
-        __slots__ = ("_parent", "_data", "_keymap", "_key_style")
+        __slots__ = ("_parent", "_data", "_keymap")
 
-        def __init__(self, parent, processors, keymap, key_style, data):
-            """Row objects are constructed by CursorResult objects."""
+        def __init__(self, parent, processors, keymap, data):
+            """Row objects are constructed by ResultProxy objects."""
 
             self._parent = parent
 
-            if processors:
-                self._data = tuple(
-                    [
-                        proc(value) if proc else value
-                        for proc, value in zip(processors, data)
-                    ]
-                )
-            else:
-                self._data = tuple(data)
-
+            self._data = tuple(
+                [
+                    proc(value) if proc else value
+                    for proc, value in zip(processors, data)
+                ]
+            )
             self._keymap = keymap
-
-            self._key_style = key_style
 
         def __reduce__(self):
             return (
                 rowproxy_reconstructor,
                 (self.__class__, self.__getstate__()),
-            )
-
-        def _filter_on_values(self, filters):
-            return Row(
-                self._parent,
-                filters,
-                self._keymap,
-                self._key_style,
-                self._data,
             )
 
         def _values_impl(self):
@@ -100,24 +81,16 @@ except ImportError:
         def __hash__(self):
             return hash(self._data)
 
-        def __getitem__(self, key):
-            return self._data[key]
-
-        _get_by_int_impl = __getitem__
-
-        def _get_by_key_impl(self, key):
-            if int in key.__class__.__mro__:
-                return self._data[key]
-
-            # the following is all LegacyRow support.   none of this
-            # should be called if not LegacyRow
-            # assert isinstance(self, LegacyRow)
-
+        def _subscript_impl(self, key, ismapping):
             try:
                 rec = self._keymap[key]
             except KeyError as ke:
                 rec = self._parent._key_fallback(key, ke)
             except TypeError:
+                # the non-C version detects a slice using TypeError.
+                # this is pretty inefficient for the slice use case
+                # but is more efficient for the integer use case since we
+                # don't have to check it up front.
                 if isinstance(key, slice):
                     return tuple(self._data[key])
                 else:
@@ -126,28 +99,21 @@ except ImportError:
             mdindex = rec[MD_INDEX]
             if mdindex is None:
                 self._parent._raise_for_ambiguous_column_name(rec)
-
-            elif self._key_style == KEY_OBJECTS_BUT_WARN and mdindex != key:
+            elif not ismapping and mdindex != key and not isinstance(key, int):
                 self._parent._warn_for_nonint(key)
 
+            # TODO: warn for non-int here, RemovedIn20Warning when available
+
             return self._data[mdindex]
+
+        def _get_by_key_impl(self, key):
+            return self._subscript_impl(key, False)
 
         def _get_by_key_impl_mapping(self, key):
-            try:
-                rec = self._keymap[key]
-            except KeyError as ke:
-                rec = self._parent._key_fallback(key, ke)
-
-            mdindex = rec[MD_INDEX]
-            if mdindex is None:
-                self._parent._raise_for_ambiguous_column_name(rec)
-            elif (
-                self._key_style == KEY_OBJECTS_ONLY
-                and int in key.__class__.__mro__
-            ):
-                raise KeyError(key)
-
-            return self._data[mdindex]
+            # the C code has two different methods so that we can distinguish
+            # between tuple-like keys (integers, slices) and mapping-like keys
+            # (strings, objects)
+            return self._subscript_impl(key, True)
 
         def __getattr__(self, name):
             try:
@@ -161,7 +127,7 @@ class Row(BaseRow, collections_abc.Sequence):
 
     The :class:`.Row` object represents a row of a database result.  It is
     typically associated in the 1.x series of SQLAlchemy with the
-    :class:`_engine.CursorResult` object, however is also used by the ORM for
+    :class:`.ResultProxy` object, however is also used by the ORM for
     tuple-like results as of SQLAlchemy 1.4.
 
     The :class:`.Row` object seeks to act as much like a Python named
@@ -184,15 +150,12 @@ class Row(BaseRow, collections_abc.Sequence):
         and now acts mostly like a named tuple.  Mapping-like functionality is
         moved to the :attr:`.Row._mapping` attribute, but will remain available
         in SQLAlchemy 1.x series via the :class:`.LegacyRow` class that is used
-        by :class:`_engine.LegacyCursorResult`.
-        See :ref:`change_4710_core` for background
+        by :class:`.ResultProxy`.   See :ref:`change_4710_core` for background
         on this change.
 
     """
 
     __slots__ = ()
-
-    _default_key_style = KEY_INTEGER_ONLY
 
     @property
     def _mapping(self):
@@ -212,29 +175,22 @@ class Row(BaseRow, collections_abc.Sequence):
         .. versionadded:: 1.4
 
         """
-        return RowMapping(
-            self._parent,
-            None,
-            self._keymap,
-            RowMapping._default_key_style,
-            self._data,
-        )
+
+        return RowMapping(self)
 
     def __contains__(self, key):
         return key in self._data
 
+    def __getitem__(self, key):
+        return self._data[key]
+
     def __getstate__(self):
-        return {
-            "_parent": self._parent,
-            "_data": self._data,
-            "_key_style": self._key_style,
-        }
+        return {"_parent": self._parent, "_data": self._data}
 
     def __setstate__(self, state):
         self._parent = parent = state["_parent"]
         self._data = state["_data"]
         self._keymap = parent._keymap
-        self._key_style = state["_key_style"]
 
     def _op(self, other, op):
         return (
@@ -286,7 +242,7 @@ class Row(BaseRow, collections_abc.Sequence):
             :attr:`.Row._mapping`
 
         """
-        return self._parent.keys
+        return [k for k in self._parent.keys if k is not None]
 
     @property
     def _fields(self):
@@ -345,18 +301,11 @@ class LegacyRow(Row):
 
     """
 
-    __slots__ = ()
-
-    if util.SQLALCHEMY_WARN_20:
-        _default_key_style = KEY_OBJECTS_BUT_WARN
-    else:
-        _default_key_style = KEY_OBJECTS_NO_WARN
-
     def __contains__(self, key):
         return self._parent._contains(key, self)
 
-    if not _baserow_usecext:
-        __getitem__ = BaseRow._get_by_key_impl
+    def __getitem__(self, key):
+        return self._get_by_key_impl(key)
 
     @util.deprecated(
         "1.4",
@@ -488,7 +437,7 @@ class ROMappingView(
         return list(other) != list(self)
 
 
-class RowMapping(BaseRow, collections_abc.Mapping):
+class RowMapping(collections_abc.Mapping):
     """A ``Mapping`` that maps column names and objects to :class:`.Row` values.
 
     The :class:`.RowMapping` is available from a :class:`.Row` via the
@@ -510,28 +459,22 @@ class RowMapping(BaseRow, collections_abc.Mapping):
 
     """
 
-    __slots__ = ()
+    __slots__ = ("row",)
 
-    _default_key_style = KEY_OBJECTS_ONLY
+    def __init__(self, row):
+        self.row = row
 
-    if not _baserow_usecext:
-
-        __getitem__ = BaseRow._get_by_key_impl_mapping
-
-        def _values_impl(self):
-            return list(self._data)
+    def __getitem__(self, key):
+        return self.row._get_by_key_impl_mapping(key)
 
     def __iter__(self):
-        return (k for k in self._parent.keys if k is not None)
+        return (k for k in self.row._parent.keys if k is not None)
 
     def __len__(self):
-        return len(self._data)
+        return len(self.row)
 
     def __contains__(self, key):
-        return self._parent._has_key(key)
-
-    def __repr__(self):
-        return repr(dict(self))
+        return self.row._parent._has_key(key)
 
     def items(self):
         """Return a view of key/value tuples for the elements in the
@@ -545,12 +488,13 @@ class RowMapping(BaseRow, collections_abc.Mapping):
         by the underlying :class:`.Row`.
 
         """
-
-        return self._parent.keys
+        return ROMappingView(
+            self, [k for k in self.row._parent.keys if k is not None]
+        )
 
     def values(self):
         """Return a view of values for the values represented in the
         underlying :class:`.Row`.
 
         """
-        return ROMappingView(self, self._values_impl())
+        return ROMappingView(self, self.row._values_impl())

@@ -29,7 +29,7 @@ accept every argument that Kinterbasdb does.
   the usage of "cursor.rowcount" with the
   Kinterbasdb dialect, which SQLAlchemy ordinarily calls upon automatically
   after any UPDATE or DELETE statement.   When disabled, SQLAlchemy's
-  CursorResult will return -1 for result.rowcount.   The rationale here is
+  ResultProxy will return -1 for result.rowcount.   The rationale here is
   that Kinterbasdb requires a second round trip to the database when
   .rowcount is called -  since SQLA's resultproxy automatically closes
   the cursor after a non-result-returning statement, rowcount must be
@@ -38,7 +38,7 @@ accept every argument that Kinterbasdb does.
   of Firebird, and setting this flag to False will also cause the
   SQLAlchemy ORM to ignore its usage. The behavior can also be controlled on a
   per-execution basis using the ``enable_rowcount`` option with
-  :meth:`_engine.Connection.execution_options`::
+  :meth:`.Connection.execution_options`::
 
       conn = engine.connect().execution_options(enable_rowcount=True)
       r = conn.execute(stmt)

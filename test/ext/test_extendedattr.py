@@ -223,7 +223,7 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
 
             data = {"a": "this is a", "b": 12}
 
-            def loader(state, keys, passive):
+            def loader(state, keys):
                 for k in keys:
                     state.dict[k] = data[k]
                 return attributes.ATTR_WAS_SET

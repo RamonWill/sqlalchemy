@@ -600,15 +600,11 @@ class DefaultsTest(fixtures.TestBase, AssertsCompiledSQL):
         """test non-quoted integer value on older sqlite pragma"""
 
         dialect = sqlite.dialect()
-        info = dialect._get_column_info(
-            "foo", "INTEGER", False, 3, False, False, False, None
-        )
+        info = dialect._get_column_info("foo", "INTEGER", False, 3, False)
         eq_(info["default"], "3")
 
 
-class DialectTest(
-    fixtures.TestBase, AssertsExecutionResults, AssertsCompiledSQL
-):
+class DialectTest(fixtures.TestBase, AssertsExecutionResults):
 
     __only_on__ = "sqlite"
 
@@ -639,7 +635,6 @@ class DialectTest(
             Column("true", Integer),
             Column("false", Integer),
             Column("column", Integer),
-            Column("exists", Integer),
         )
         try:
             meta.create_all()
@@ -784,13 +779,13 @@ class DialectTest(
         eq_(d.create_connect_args(url), expected)
 
     @testing.combinations(
-        ("no_persisted", "", "ignore"),
-        ("persisted_none", "", None),
-        ("persisted_true", " STORED", True),
-        ("persisted_false", " VIRTUAL", False),
-        id_="iaa",
+        ("no_persisted", "ignore"),
+        ("persisted_none", None),
+        ("persisted_true", True),
+        ("persisted_false", False),
+        id_="ia",
     )
-    def test_column_computed(self, text, persisted):
+    def test_column_computed(self, persisted):
         m = MetaData()
         kwargs = {"persisted": persisted} if persisted != "ignore" else {}
         t = Table(
@@ -799,10 +794,11 @@ class DialectTest(
             Column("x", Integer),
             Column("y", Integer, Computed("x + 2", **kwargs)),
         )
-        self.assert_compile(
-            schema.CreateTable(t),
-            "CREATE TABLE t (x INTEGER,"
-            " y INTEGER GENERATED ALWAYS AS (x + 2)%s)" % text,
+        assert_raises_message(
+            exc.CompileError,
+            "SQLite does not support computed columns",
+            schema.CreateTable(t).compile,
+            dialect=sqlite.dialect(),
         )
 
 
@@ -1066,13 +1062,7 @@ class SQLTest(fixtures.TestBase, AssertsCompiledSQL):
     def test_column_defaults_ddl(self):
 
         t = Table(
-            "t",
-            MetaData(),
-            Column(
-                "x",
-                Boolean(create_constraint=True),
-                server_default=sql.false(),
-            ),
+            "t", MetaData(), Column("x", Boolean, server_default=sql.false())
         )
 
         self.assert_compile(

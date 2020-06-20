@@ -136,15 +136,6 @@ class _UnicodeFixture(_LiteralRoundTripFixture, fixtures.TestBase):
         for row in rows:
             assert isinstance(row[0], util.text_type)
 
-    def _test_null_strings(self, connection):
-        unicode_table = self.tables.unicode_table
-
-        connection.execute(unicode_table.insert(), {"unicode_data": None})
-        row = connection.execute(
-            select([unicode_table.c.unicode_data])
-        ).first()
-        eq_(row, (None,))
-
     def _test_empty_strings(self, connection):
         unicode_table = self.tables.unicode_table
 
@@ -173,9 +164,6 @@ class UnicodeVarcharTest(_UnicodeFixture, fixtures.TablesTest):
     def test_empty_strings_varchar(self, connection):
         self._test_empty_strings(connection)
 
-    def test_null_strings_varchar(self, connection):
-        self._test_null_strings(connection)
-
 
 class UnicodeTextTest(_UnicodeFixture, fixtures.TablesTest):
     __requires__ = "unicode_data", "text_type"
@@ -186,9 +174,6 @@ class UnicodeTextTest(_UnicodeFixture, fixtures.TablesTest):
     @requirements.empty_strings_text
     def test_empty_strings_text(self, connection):
         self._test_empty_strings(connection)
-
-    def test_null_strings_text(self, connection):
-        self._test_null_strings(connection)
 
 
 class TextTest(_LiteralRoundTripFixture, fixtures.TablesTest):
@@ -217,20 +202,12 @@ class TextTest(_LiteralRoundTripFixture, fixtures.TablesTest):
         row = connection.execute(select([text_table.c.text_data])).first()
         eq_(row, ("some text",))
 
-    @testing.requires.empty_strings_text
     def test_text_empty_strings(self, connection):
         text_table = self.tables.text_table
 
         connection.execute(text_table.insert(), {"text_data": ""})
         row = connection.execute(select([text_table.c.text_data])).first()
         eq_(row, ("",))
-
-    def test_text_null_strings(self, connection):
-        text_table = self.tables.text_table
-
-        connection.execute(text_table.insert(), {"text_data": None})
-        row = connection.execute(select([text_table.c.text_data])).first()
-        eq_(row, (None,))
 
     def test_literal(self):
         self._literal_round_trip(Text, ["some text"], ["some text"])
@@ -542,10 +519,10 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
             filter_=lambda n: n is not None and round(n, 5) or None,
         )
 
-    def test_float_coerce_round_trip(self, connection):
+    def test_float_coerce_round_trip(self):
         expr = 15.7563
 
-        val = connection.scalar(select([literal(expr)]))
+        val = testing.db.scalar(select([literal(expr)]))
         eq_(val, expr)
 
     # this does not work in MySQL, see #4036, however we choose not
@@ -553,17 +530,17 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
 
     @testing.requires.implicit_decimal_binds
     @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
-    def test_decimal_coerce_round_trip(self, connection):
+    def test_decimal_coerce_round_trip(self):
         expr = decimal.Decimal("15.7563")
 
-        val = connection.scalar(select([literal(expr)]))
+        val = testing.db.scalar(select([literal(expr)]))
         eq_(val, expr)
 
     @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
-    def test_decimal_coerce_round_trip_w_cast(self, connection):
+    def test_decimal_coerce_round_trip_w_cast(self):
         expr = decimal.Decimal("15.7563")
 
-        val = connection.scalar(select([cast(expr, Numeric(10, 4))]))
+        val = testing.db.scalar(select([cast(expr, Numeric(10, 4))]))
         eq_(val, expr)
 
     @testing.requires.precision_numerics_general

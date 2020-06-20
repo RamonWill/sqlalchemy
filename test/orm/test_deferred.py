@@ -1,8 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy import ForeignKey
-from sqlalchemy import func
 from sqlalchemy import Integer
-from sqlalchemy import select
 from sqlalchemy import testing
 from sqlalchemy import util
 from sqlalchemy.orm import aliased
@@ -24,7 +22,6 @@ from sqlalchemy.orm import undefer
 from sqlalchemy.orm import undefer_group
 from sqlalchemy.orm import with_expression
 from sqlalchemy.orm import with_polymorphic
-from sqlalchemy.sql import literal
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import eq_
@@ -1257,10 +1254,10 @@ class SelfReferentialMultiPathTest(testing.fixtures.DeclarativeMappedTest):
             name = sa.Column(sa.String(10))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Node = cls.classes.Node
 
-        session = Session(connection)
+        session = Session()
         session.add_all(
             [
                 Node(id=1, name="name"),
@@ -1635,7 +1632,8 @@ class InheritanceTest(_Polymorphic):
             'Mapped attribute "Manager.status" does not apply to any of the '
             "root entities in this query, e.g. "
             r"with_polymorphic\(Person, \[Manager\]\).",
-            s.query(wp).options(load_only(Manager.status))._compile_context,
+            s.query(wp).options,
+            load_only(Manager.status),
         )
 
         q = s.query(wp).options(load_only(wp.Manager.status))
@@ -1661,24 +1659,18 @@ class InheritanceTest(_Polymorphic):
             sa.exc.ArgumentError,
             r'Can\'t find property named "status" on '
             r"with_polymorphic\(Person, \[Manager\]\) in this Query.",
-            s.query(Company)
-            .options(
-                joinedload(Company.employees.of_type(wp)).load_only("status")
-            )
-            ._compile_context,
+            s.query(Company).options,
+            joinedload(Company.employees.of_type(wp)).load_only("status"),
         )
 
         assert_raises_message(
             sa.exc.ArgumentError,
             'Attribute "Manager.status" does not link from element '
             r'"with_polymorphic\(Person, \[Manager\]\)"',
-            s.query(Company)
-            .options(
-                joinedload(Company.employees.of_type(wp)).load_only(
-                    Manager.status
-                )
-            )
-            ._compile_context,
+            s.query(Company).options,
+            joinedload(Company.employees.of_type(wp)).load_only(
+                Manager.status
+            ),
         )
 
         self.assert_compile(
@@ -1726,17 +1718,10 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
 
             b_expr = query_expression()
 
-        class C(fixtures.ComparableEntity, Base):
-            __tablename__ = "c"
-            id = Column(Integer, primary_key=True)
-            x = Column(Integer)
-
-            c_expr = query_expression(literal(1))
-
     @classmethod
-    def insert_data(cls, connection):
-        A, B, C = cls.classes("A", "B", "C")
-        s = Session(connection)
+    def insert_data(cls):
+        A, B = cls.classes("A", "B")
+        s = Session()
 
         s.add_all(
             [
@@ -1744,8 +1729,6 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
                 A(id=2, x=2, y=3),
                 A(id=3, x=5, y=10, bs=[B(id=3, p=5, q=0)]),
                 A(id=4, x=2, y=10, bs=[B(id=4, p=19, q=8), B(id=5, p=5, q=5)]),
-                C(id=1, x=1),
-                C(id=2, x=2),
             ]
         )
 
@@ -1763,25 +1746,6 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
         )
 
         eq_(a1.all(), [A(my_expr=5), A(my_expr=15), A(my_expr=12)])
-
-    def test_expr_default_value(self):
-        A = self.classes.A
-        C = self.classes.C
-        s = Session()
-
-        a1 = s.query(A).order_by(A.id).filter(A.x > 1)
-        eq_(a1.all(), [A(my_expr=None), A(my_expr=None), A(my_expr=None)])
-
-        c1 = s.query(C).order_by(C.id)
-        eq_(c1.all(), [C(c_expr=1), C(c_expr=1)])
-
-        c2 = (
-            s.query(C)
-            .options(with_expression(C.c_expr, C.x * 2))
-            .filter(C.x > 1)
-            .order_by(C.id)
-        )
-        eq_(c2.all(), [C(c_expr=4)])
 
     def test_reuse_expr(self):
         A = self.classes.A
@@ -1900,9 +1864,9 @@ class RaiseLoadTest(fixtures.DeclarativeMappedTest):
             z = deferred(Column(Integer), raiseload=True)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A = cls.classes.A
-        s = Session(connection)
+        s = Session()
         s.add(A(id=1, x=2, y=3, z=4))
         s.commit()
 
@@ -2059,46 +2023,3 @@ class RaiseLoadTest(fixtures.DeclarativeMappedTest):
         eq_(a1.id, 1)
 
         assert "x" in a1.__dict__
-
-
-class AutoflushTest(fixtures.DeclarativeMappedTest):
-    @classmethod
-    def setup_classes(cls):
-        Base = cls.DeclarativeBasic
-
-        class A(Base):
-            __tablename__ = "a"
-
-            id = Column(Integer, primary_key=True)
-            bs = relationship("B")
-
-        class B(Base):
-            __tablename__ = "b"
-            id = Column(Integer, primary_key=True)
-            a_id = Column(ForeignKey("a.id"))
-
-        A.b_count = deferred(
-            select([func.count(1)]).where(A.id == B.a_id).scalar_subquery()
-        )
-
-    def test_deferred_autoflushes(self):
-        A, B = self.classes("A", "B")
-
-        s = Session()
-
-        a1 = A(id=1, bs=[B()])
-        s.add(a1)
-        s.commit()
-
-        eq_(a1.b_count, 1)
-        s.close()
-
-        a1 = s.query(A).first()
-        assert "b_count" not in a1.__dict__
-
-        b1 = B(a_id=1)
-        s.add(b1)
-
-        eq_(a1.b_count, 2)
-
-        assert b1 in s

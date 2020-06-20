@@ -5,7 +5,6 @@ including front-end loading, cache invalidation and collection caching.
 
 from .caching_query import FromCache
 from .caching_query import RelationshipCache
-from .environment import cache
 from .environment import Session
 from .model import cache_address_bits
 from .model import Person
@@ -49,8 +48,7 @@ def load_name_range(start, end, invalidate=False):
 
     # if requested, invalidate the cache on current criterion.
     if invalidate:
-        cache.invalidate(q, {}, FromCache("default", "name_range"))
-        cache.invalidate(q, {}, RelationshipCache(Person.addresses, "default"))
+        q.invalidate()
 
     return q.all()
 

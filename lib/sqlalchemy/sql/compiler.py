@@ -28,7 +28,6 @@ import contextlib
 import itertools
 import operator
 import re
-import time
 
 from . import base
 from . import coercions
@@ -373,8 +372,6 @@ class Compiled(object):
 
     _cached_metadata = None
 
-    _result_columns = None
-
     schema_translate_map = None
 
     execution_options = util.immutabledict()
@@ -383,58 +380,11 @@ class Compiled(object):
     sub-elements of the statement can modify these.
     """
 
-    compile_state = None
-    """Optional :class:`.CompileState` object that maintains additional
-    state used by the compiler.
-
-    Major executable objects such as :class:`_expression.Insert`,
-    :class:`_expression.Update`, :class:`_expression.Delete`,
-    :class:`_expression.Select` will generate this
-    state when compiled in order to calculate additional information about the
-    object.   For the top level object that is to be executed, the state can be
-    stored here where it can also have applicability towards result set
-    processing.
-
-    .. versionadded:: 1.4
-
-    """
-
-    _rewrites_selected_columns = False
-    """if True, indicates the compile_state object rewrites an incoming
-    ReturnsRows (like a Select) so that the columns we compile against in the
-    result set are not what were expressed on the outside.   this is a hint to
-    the execution context to not link the statement.selected_columns to the
-    columns mapped in the result object.
-
-    That is, when this flag is False::
-
-        stmt = some_statement()
-
-        result = conn.execute(stmt)
-        row = result.first()
-
-        # selected_columns are in a 1-1 relationship with the
-        # columns in the result, and are targetable in mapping
-        for col in stmt.selected_columns:
-            assert col in row._mapping
-
-    When True::
-
-        # selected columns are not what are in the rows.  the context
-        # rewrote the statement for some other set of selected_columns.
-        for col in stmt.selected_columns:
-            assert col not in row._mapping
-
-
-    """
-
-    cache_key = None
-    _gen_time = None
-
     def __init__(
         self,
         dialect,
         statement,
+        bind=None,
         schema_translate_map=None,
         render_schema_translate=False,
         compile_kwargs=util.immutabledict(),
@@ -443,7 +393,7 @@ class Compiled(object):
 
         :param dialect: :class:`.Dialect` to compile against.
 
-        :param statement: :class:`_expression.ClauseElement` to be compiled.
+        :param statement: :class:`.ClauseElement` to be compiled.
 
         :param bind: Optional Engine or Connection to compile this
           statement against.
@@ -464,6 +414,7 @@ class Compiled(object):
         """
 
         self.dialect = dialect
+        self.bind = bind
         self.preparer = self.dialect.identifier_preparer
         if schema_translate_map:
             self.schema_translate_map = schema_translate_map
@@ -482,15 +433,22 @@ class Compiled(object):
                 self.string = self.preparer._render_schema_translates(
                     self.string, schema_translate_map
                 )
-        self._gen_time = time.time()
 
-    def _execute_on_connection(
-        self, connection, multiparams, params, execution_options
-    ):
+    @util.deprecated(
+        "0.7",
+        "The :meth:`.Compiled.compile` method is deprecated and will be "
+        "removed in a future release.   The :class:`.Compiled` object "
+        "now runs its compilation within the constructor, and this method "
+        "does nothing.",
+    )
+    def compile(self):
+        """Produce the internal string representation of this element.
+        """
+        pass
+
+    def _execute_on_connection(self, connection, multiparams, params):
         if self.can_execute:
-            return connection._execute_compiled(
-                self, multiparams, params, execution_options
-            )
+            return connection._execute_compiled(self, multiparams, params)
         else:
             raise exc.ObjectNotExecutableError(self.statement)
 
@@ -526,6 +484,24 @@ class Compiled(object):
     def params(self):
         """Return the bind params for this compiled object."""
         return self.construct_params()
+
+    def execute(self, *multiparams, **params):
+        """Execute this compiled object."""
+
+        e = self.bind
+        if e is None:
+            raise exc.UnboundExecutionError(
+                "This Compiled object is not bound to any Engine "
+                "or Connection.",
+                code="2afi",
+            )
+        return e._execute_compiled(self, multiparams, params)
+
+    def scalar(self, *multiparams, **params):
+        """Execute this compiled object and return the result's
+        scalar value."""
+
+        return self.execute(*multiparams, **params).scalar()
 
 
 class TypeCompiler(util.with_metaclass(util.EnsureKWArgType, object)):
@@ -569,7 +545,7 @@ class _CompileLabel(elements.ColumnElement):
 class SQLCompiler(Compiled):
     """Default implementation of :class:`.Compiled`.
 
-    Compiles :class:`_expression.ClauseElement` objects into SQL strings.
+    Compiles :class:`.ClauseElement` objects into SQL strings.
 
     """
 
@@ -669,10 +645,18 @@ class SQLCompiler(Compiled):
 
     insert_prefetch = update_prefetch = ()
 
-    _cache_key_bind_match = None
-    """a mapping that will relate the BindParameter object we compile
-    to those that are part of the extracted collection of parameters
-    in the cache key, if we were given a cache key.
+    compile_state = None
+    """Optional :class:`.CompileState` object that maintains additional
+    state used by the compiler.
+
+    Major executable objects such as :class:`~.sql.expression.Insert`,
+    :class:`.Update`, :class:`.Delete`, :class:`.Select` will generate this
+    state when compiled in order to calculate additional information about the
+    object.   For the top level object that is to be executed, the state can be
+    stored here where it can also have applicability towards result set
+    processing.
+
+    .. versionadded:: 1.4
 
     """
 
@@ -690,7 +674,7 @@ class SQLCompiler(Compiled):
 
         :param dialect: :class:`.Dialect` to be used
 
-        :param statement: :class:`_expression.ClauseElement` to be compiled
+        :param statement: :class:`.ClauseElement` to be compiled
 
         :param column_keys:  a list of column names to be compiled into an
          INSERT or UPDATE statement.
@@ -705,9 +689,6 @@ class SQLCompiler(Compiled):
         self.column_keys = column_keys
 
         self.cache_key = cache_key
-
-        if cache_key:
-            self._cache_key_bind_match = {b: b for b in cache_key[1]}
 
         # compile INSERT/UPDATE defaults/sequences inlined (no pre-
         # execute)
@@ -728,7 +709,7 @@ class SQLCompiler(Compiled):
 
         # relates label names in the final SQL to a tuple of local
         # column/label name, ColumnElement object (if any) and
-        # TypeEngine. CursorResult uses this for type processing and
+        # TypeEngine. ResultProxy uses this for type processing and
         # column targeting
         self._result_columns = []
 
@@ -866,18 +847,16 @@ class SQLCompiler(Compiled):
                     ),
                     replace_context=err,
                 )
-
-            ckbm = self._cache_key_bind_match
-            resolved_extracted = {
-                ckbm[b]: extracted
-                for b, extracted in zip(orig_extracted, extracted_parameters)
-            }
+            resolved_extracted = dict(
+                zip([b.key for b in orig_extracted], extracted_parameters)
+            )
         else:
             resolved_extracted = None
 
         if params:
             pd = {}
-            for bindparam, name in self.bind_names.items():
+            for bindparam in self.bind_names:
+                name = self.bind_names[bindparam]
                 if bindparam.key in params:
                     pd[name] = params[bindparam.key]
                 elif name in params:
@@ -900,7 +879,7 @@ class SQLCompiler(Compiled):
                 else:
                     if resolved_extracted:
                         value_param = resolved_extracted.get(
-                            bindparam, bindparam
+                            bindparam.key, bindparam
                         )
                     else:
                         value_param = bindparam
@@ -912,7 +891,7 @@ class SQLCompiler(Compiled):
             return pd
         else:
             pd = {}
-            for bindparam, name in self.bind_names.items():
+            for bindparam in self.bind_names:
                 if _check and bindparam.required:
                     if _group_number:
                         raise exc.InvalidRequestError(
@@ -929,14 +908,18 @@ class SQLCompiler(Compiled):
                         )
 
                 if resolved_extracted:
-                    value_param = resolved_extracted.get(bindparam, bindparam)
+                    value_param = resolved_extracted.get(
+                        bindparam.key, bindparam
+                    )
                 else:
                     value_param = bindparam
 
                 if bindparam.callable:
-                    pd[name] = value_param.effective_value
+                    pd[
+                        self.bind_names[bindparam]
+                    ] = value_param.effective_value
                 else:
-                    pd[name] = value_param.value
+                    pd[self.bind_names[bindparam]] = value_param.value
             return pd
 
     @property
@@ -1080,11 +1063,11 @@ class SQLCompiler(Compiled):
 
         return expanded_state
 
-    @util.preload_module("sqlalchemy.engine.cursor")
+    @util.preload_module("sqlalchemy.engine.result")
     def _create_result_map(self):
         """utility method used for unit tests only."""
-        cursor = util.preloaded.engine_cursor
-        return cursor.CursorResultMetaData._create_description_match_map(
+        result = util.preloaded.engine_result
+        return result.CursorResultMetaData._create_description_match_map(
             self._result_columns
         )
 
@@ -1557,7 +1540,7 @@ class SQLCompiler(Compiled):
 
         compile_state = cs._compile_state_factory(cs, self, **kwargs)
 
-        if toplevel and not self.compile_state:
+        if toplevel:
             self.compile_state = compile_state
 
         entry = self._default_stack_entry if toplevel else self.stack[-1]
@@ -2012,19 +1995,6 @@ class SQLCompiler(Compiled):
                     )
 
         self.binds[bindparam.key] = self.binds[name] = bindparam
-
-        # if we are given a cache key that we're going to match against,
-        # relate the bindparam here to one that is most likely present
-        # in the "extracted params" portion of the cache key.  this is used
-        # to set up a positional mapping that is used to determine the
-        # correct parameters for a subsequent use of this compiled with
-        # a different set of parameter values.   here, we accommodate for
-        # parameters that may have been cloned both before and after the cache
-        # key was been generated.
-        ckbm = self._cache_key_bind_match
-        if ckbm:
-            ckbm.update({bp: bindparam for bp in bindparam._cloned_set})
-
         if bindparam.isoutparam:
             self.has_out_parameters = True
 
@@ -2569,13 +2539,6 @@ class SQLCompiler(Compiled):
             )
         return froms
 
-    translate_select_structure = None
-    """if none None, should be a callable which accepts (select_stmt, **kw)
-    and returns a select object.   this is used for structural changes
-    mostly to accommodate for LIMIT/OFFSET schemes
-
-    """
-
     def visit_select(
         self,
         select_stmt,
@@ -2587,17 +2550,7 @@ class SQLCompiler(Compiled):
         from_linter=None,
         **kwargs
     ):
-        assert select_wraps_for is None, (
-            "SQLAlchemy 1.4 requires use of "
-            "the translate_select_structure hook for structural "
-            "translations of SELECT objects"
-        )
 
-        # initial setup of SELECT.  the compile_state_factory may now
-        # be creating a totally different SELECT from the one that was
-        # passed in.  for ORM use this will convert from an ORM-state
-        # SELECT to a regular "Core" SELECT.  other composed operations
-        # such as computation of joins will be performed.
         compile_state = select_stmt._compile_state_factory(
             select_stmt, self, **kwargs
         )
@@ -2605,28 +2558,8 @@ class SQLCompiler(Compiled):
 
         toplevel = not self.stack
 
-        if toplevel and not self.compile_state:
+        if toplevel:
             self.compile_state = compile_state
-
-        # translate step for Oracle, SQL Server which often need to
-        # restructure the SELECT to allow for LIMIT/OFFSET and possibly
-        # other conditions
-        if self.translate_select_structure:
-            new_select_stmt = self.translate_select_structure(
-                select_stmt, asfrom=asfrom, **kwargs
-            )
-
-            # if SELECT was restructured, maintain a link to the originals
-            # and assemble a new compile state
-            if new_select_stmt is not select_stmt:
-                compile_state_wraps_for = compile_state
-                select_wraps_for = select_stmt
-                select_stmt = new_select_stmt
-
-                compile_state = select_stmt._compile_state_factory(
-                    select_stmt, self, **kwargs
-                )
-                select_stmt = compile_state.statement
 
         entry = self._default_stack_entry if toplevel else self.stack[-1]
 
@@ -2689,8 +2622,12 @@ class SQLCompiler(Compiled):
         ]
 
         if populate_result_map and select_wraps_for is not None:
-            # if this select was generated from translate_select,
+            # if this select is a compiler-generated wrapper,
             # rewrite the targeted columns in the result map
+
+            compile_state_wraps_for = select_wraps_for._compile_state_factory(
+                select_wraps_for, self, **kwargs
+            )
 
             translate = dict(
                 zip(
@@ -2833,12 +2770,10 @@ class SQLCompiler(Compiled):
 
         if self.linting & COLLECT_CARTESIAN_PRODUCTS:
             from_linter = FromLinter({}, set())
-            warn_linting = self.linting & WARN_LINTING
             if toplevel:
                 self.from_linter = from_linter
         else:
             from_linter = None
-            warn_linting = False
 
         if froms:
             text += " \nFROM "
@@ -2878,7 +2813,10 @@ class SQLCompiler(Compiled):
             if t:
                 text += " \nWHERE " + t
 
-        if warn_linting:
+        if (
+            self.linting & COLLECT_CARTESIAN_PRODUCTS
+            and self.linting & WARN_LINTING
+        ):
             from_linter.warn()
 
         if select._group_by_clauses:
@@ -2937,16 +2875,7 @@ class SQLCompiler(Compiled):
         before column list.
 
         """
-        if select._distinct_on:
-            util.warn_deprecated(
-                "DISTINCT ON is currently supported only by the PostgreSQL "
-                "dialect.  Use of DISTINCT ON for other backends is currently "
-                "silently ignored, however this usage is deprecated, and will "
-                "raise CompileError in a future release for all backends "
-                "that do not support this syntax.",
-                version="1.4",
-            )
-        return "DISTINCT " if select._distinct else ""
+        return select._distinct and "DISTINCT " or ""
 
     def group_by_clause(self, select, **kw):
         """allow dialects to customize how GROUP BY is rendered."""
@@ -3073,8 +3002,7 @@ class SQLCompiler(Compiled):
 
         if toplevel:
             self.isinsert = True
-            if not self.compile_state:
-                self.compile_state = compile_state
+            self.compile_state = compile_state
 
         self.stack.append(
             {
@@ -3219,8 +3147,6 @@ class SQLCompiler(Compiled):
         toplevel = not self.stack
         if toplevel:
             self.isupdate = True
-            if not self.compile_state:
-                self.compile_state = compile_state
 
         extra_froms = compile_state._extra_froms
         is_multitable = bool(extra_froms)
@@ -3348,8 +3274,6 @@ class SQLCompiler(Compiled):
         toplevel = not self.stack
         if toplevel:
             self.isdelete = True
-            if not self.compile_state:
-                self.compile_state = compile_state
 
         extra_froms = compile_state._extra_froms
 
@@ -3439,12 +3363,10 @@ class StrSQLCompiler(SQLCompiler):
 
     The :class:`.StrSQLCompiler` is invoked whenever a Core expression
     element is directly stringified without calling upon the
-    :meth:`_expression.ClauseElement.compile` method.
-    It can render a limited set
+    :meth:`.ClauseElement.compile` method.   It can render a limited set
     of non-standard SQL constructs to assist in basic stringification,
     however for more substantial custom or dialect-specific SQL constructs,
-    it will be necessary to make use of
-    :meth:`_expression.ClauseElement.compile`
+    it will be necessary to make use of :meth:`.ClauseElement.compile`
     directly.
 
     .. seealso::
@@ -3497,9 +3419,6 @@ class StrSQLCompiler(SQLCompiler):
 
     def visit_empty_set_expr(self, type_):
         return "SELECT 1 WHERE 1!=1"
-
-    def get_from_hint_text(self, table, text):
-        return "[%s]" % text
 
 
 class DDLCompiler(Compiled):
@@ -3750,17 +3669,14 @@ class DDLCompiler(Compiled):
             drop.element, use_table=True
         )
 
-    def visit_create_sequence(self, create, prefix=None, **kw):
+    def visit_create_sequence(self, create, **kw):
         text = "CREATE SEQUENCE %s" % self.preparer.format_sequence(
             create.element
         )
-        if prefix:
-            text += prefix
         if create.element.increment is not None:
             text += " INCREMENT BY %d" % create.element.increment
-        if create.element.start is None:
-            create.element.start = self.dialect.default_sequence_base
-        text += " START WITH %d" % create.element.start
+        if create.element.start is not None:
+            text += " START WITH %d" % create.element.start
         if create.element.minvalue is not None:
             text += " MINVALUE %d" % create.element.minvalue
         if create.element.maxvalue is not None:
@@ -4328,9 +4244,7 @@ class IdentifierPreparer(object):
                 "deprecated and will be removed in a future release.  This "
                 "flag has no effect on the behavior of the "
                 "IdentifierPreparer.quote method; please refer to "
-                "quoted_name().",
-                # deprecated 0.9. warning from 1.3
-                version="0.9",
+                "quoted_name()."
             )
 
         return self.quote(schema)
@@ -4366,9 +4280,7 @@ class IdentifierPreparer(object):
                 "deprecated and will be removed in a future release.  This "
                 "flag has no effect on the behavior of the "
                 "IdentifierPreparer.quote method; please refer to "
-                "quoted_name().",
-                # deprecated 0.9. warning from 1.3
-                version="0.9",
+                "quoted_name()."
             )
 
         force = getattr(ident, "quote", None)

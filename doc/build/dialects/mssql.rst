@@ -124,3 +124,12 @@ pymssql
 -------
 .. automodule:: sqlalchemy.dialects.mssql.pymssql
 
+zxjdbc
+------
+
+.. automodule:: sqlalchemy.dialects.mssql.zxjdbc
+
+AdoDBAPI
+--------
+.. automodule:: sqlalchemy.dialects.mssql.adodbapi
+

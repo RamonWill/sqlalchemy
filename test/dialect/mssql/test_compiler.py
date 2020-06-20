@@ -13,6 +13,7 @@ from sqlalchemy import MetaData
 from sqlalchemy import PrimaryKeyConstraint
 from sqlalchemy import schema
 from sqlalchemy import select
+from sqlalchemy import Sequence
 from sqlalchemy import sql
 from sqlalchemy import String
 from sqlalchemy import Table
@@ -21,7 +22,6 @@ from sqlalchemy import union
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import update
 from sqlalchemy.dialects import mssql
-from sqlalchemy.dialects.mssql import base as mssql_base
 from sqlalchemy.dialects.mssql import mxodbc
 from sqlalchemy.dialects.mssql.base import try_cast
 from sqlalchemy.sql import column
@@ -523,42 +523,6 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             checkparams={"param_1": "bar"},
             # if name_1 is included, too many parameters are passed to dbapi
             checkpositional=("bar",),
-        )
-
-    def test_schema_many_tokens_one(self):
-        metadata = MetaData()
-        tbl = Table(
-            "test",
-            metadata,
-            Column("id", Integer, primary_key=True),
-            schema="abc.def.efg.hij",
-        )
-
-        # for now, we don't really know what the above means, at least
-        # don't lose the dot
-        self.assert_compile(
-            select([tbl]),
-            "SELECT [abc.def.efg].hij.test.id FROM [abc.def.efg].hij.test",
-        )
-
-        dbname, owner = mssql_base._schema_elements("abc.def.efg.hij")
-        eq_(dbname, "abc.def.efg")
-        assert not isinstance(dbname, quoted_name)
-        eq_(owner, "hij")
-
-    def test_schema_many_tokens_two(self):
-        metadata = MetaData()
-        tbl = Table(
-            "test",
-            metadata,
-            Column("id", Integer, primary_key=True),
-            schema="[abc].[def].[efg].[hij]",
-        )
-
-        self.assert_compile(
-            select([tbl]),
-            "SELECT [abc].[def].[efg].hij.test.id "
-            "FROM [abc].[def].[efg].hij.test",
         )
 
     def test_force_schema_quoted_name_w_dot_case_insensitive(self):
@@ -1192,6 +1156,52 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(1,5), "
             "PRIMARY KEY (id))",
         )
+
+    def test_sequence_start_0(self):
+        metadata = MetaData()
+        tbl = Table(
+            "test",
+            metadata,
+            Column("id", Integer, Sequence("", 0), primary_key=True),
+        )
+        with testing.expect_deprecated(
+            "Use of Sequence with SQL Server in order to affect "
+        ):
+            self.assert_compile(
+                schema.CreateTable(tbl),
+                "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(0,1), "
+                "PRIMARY KEY (id))",
+            )
+
+    def test_sequence_non_primary_key(self):
+        metadata = MetaData()
+        tbl = Table(
+            "test",
+            metadata,
+            Column("id", Integer, Sequence("", start=5), primary_key=False),
+        )
+        with testing.expect_deprecated(
+            "Use of Sequence with SQL Server in order to affect "
+        ):
+            self.assert_compile(
+                schema.CreateTable(tbl),
+                "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(5,1))",
+            )
+
+    def test_sequence_ignore_nullability(self):
+        metadata = MetaData()
+        tbl = Table(
+            "test",
+            metadata,
+            Column("id", Integer, Sequence("", start=5), nullable=True),
+        )
+        with testing.expect_deprecated(
+            "Use of Sequence with SQL Server in order to affect "
+        ):
+            self.assert_compile(
+                schema.CreateTable(tbl),
+                "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(5,1))",
+            )
 
     def test_table_pkc_clustering(self):
         metadata = MetaData()

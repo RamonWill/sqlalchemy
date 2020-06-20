@@ -209,9 +209,10 @@ class TypeReflectionTest(fixtures.TestBase):
         ]
         self._run_test(specs, [])
 
+    @testing.uses_deprecated("Manually quoting ENUM value literals")
     def test_legacy_enum_types(self):
 
-        specs = [(mysql.ENUM("", "fleem"), mysql.ENUM("", "fleem"))]
+        specs = [(mysql.ENUM("''", "'fleem'"), mysql.ENUM("''", "'fleem'"))]
 
         self._run_test(specs, ["enums"])
 
@@ -853,7 +854,7 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
             dialect._casing = casing
             dialect.default_schema_name = "Test"
             connection = mock.Mock(
-                dialect=dialect, execute=lambda stmt, params: ischema
+                dialect=dialect, execute=lambda stmt, **params: ischema
             )
             dialect._correct_for_mysql_bugs_88718_96365(fkeys, connection)
             eq_(

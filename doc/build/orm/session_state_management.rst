@@ -50,7 +50,7 @@ Getting the Current State of an Object
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The actual state of any mapped object can be viewed at any time using
-the :func:`_sa.inspect` system::
+the :func:`.inspect` system::
 
   >>> from sqlalchemy import inspect
   >>> insp = inspect(my_object)
@@ -254,8 +254,8 @@ new session. Here's some examples:
   In the caching use case, it's common to use the ``load=False``
   flag to remove the overhead of reconciling the object's state
   with the database.   There's also a "bulk" version of
-  :meth:`~.Session.merge` called :meth:`_query.Query.merge_result`
-  that was designed to work with cache-extended :class:`_query.Query`
+  :meth:`~.Session.merge` called :meth:`~.Query.merge_result`
+  that was designed to work with cache-extended :class:`.Query`
   objects - see the section :ref:`examples_caching`.
 
 * An application wants to transfer the state of a series of objects
@@ -332,15 +332,15 @@ and made our ``a1`` object pending, as though we had added it.   Now we have
 
 Above, our ``a1`` is already pending in the session. The
 subsequent :meth:`~.Session.merge` operation essentially
-does nothing. Cascade can be configured via the :paramref:`_orm.relationship.cascade`
-option on :func:`_orm.relationship`, although in this case it
+does nothing. Cascade can be configured via the :paramref:`~.relationship.cascade`
+option on :func:`.relationship`, although in this case it
 would mean removing the ``save-update`` cascade from the
 ``User.addresses`` relationship - and usually, that behavior
 is extremely convenient.  The solution here would usually be to not assign
 ``a1.user`` to an object already persistent in the target
 session.
 
-The ``cascade_backrefs=False`` option of :func:`_orm.relationship`
+The ``cascade_backrefs=False`` option of :func:`.relationship`
 will also prevent the ``Address`` from
 being added to the session via the ``a1.user = u1`` assignment.
 
@@ -439,7 +439,7 @@ where ``id`` and ``name`` refer to those columns in the database.
 ``_sa_instance_state`` is a non-database-persisted value used by SQLAlchemy
 internally (it refers to the :class:`.InstanceState` for the instance.
 While not directly relevant to this section, if we want to get at it,
-we should use the :func:`_sa.inspect` function to access it).
+we should use the :func:`.inspect` function to access it).
 
 At this point, the state in our ``User`` object matches that of the loaded
 database row.  But upon expiring the object using a method such as
@@ -533,24 +533,24 @@ or loaded with :meth:`~.Session.refresh` varies based on several factors, includ
 
 * The load of expired attributes is triggered from **column-mapped attributes only**.
   While any kind of attribute can be marked as expired, including a
-  :func:`_orm.relationship` - mapped attribute, accessing an expired :func:`_orm.relationship`
+  :func:`.relationship` - mapped attribute, accessing an expired :func:`.relationship`
   attribute will emit a load only for that attribute, using standard
   relationship-oriented lazy loading.   Column-oriented attributes, even if
   expired, will not load as part of this operation, and instead will load when
   any column-oriented attribute is accessed.
 
-* :func:`_orm.relationship`- mapped attributes will not load in response to
+* :func:`.relationship`- mapped attributes will not load in response to
   expired column-based attributes being accessed.
 
 * Regarding relationships, :meth:`~.Session.refresh` is more restrictive than
-  :meth:`.Session.expire` with regards to attributes that aren't column-mapped.
-  Calling :meth:`.Session.refresh` and passing a list of names that only includes
+  :meth:`~.Session.expire` with regards to attributes that aren't column-mapped.
+  Calling :meth:`.refresh` and passing a list of names that only includes
   relationship-mapped attributes will actually raise an error.
-  In any case, non-eager-loading :func:`_orm.relationship` attributes will not be
+  In any case, non-eager-loading :func:`.relationship` attributes will not be
   included in any refresh operation.
 
-* :func:`_orm.relationship` attributes configured as "eager loading" via the
-  :paramref:`_orm.relationship.lazy` parameter will load in the case of
+* :func:`.relationship` attributes configured as "eager loading" via the
+  :paramref:`~.relationship.lazy` parameter will load in the case of
   :meth:`~.Session.refresh`, if either no attribute names are specified, or
   if their names are included in the list of attributes to be
   refreshed.
@@ -608,7 +608,7 @@ database, in those cases when it is known that the current state of data
 is possibly stale.  Reasons for this might include:
 
 * some SQL has been emitted within the transaction outside of the
-  scope of the ORM's object handling, such as if a :meth:`_schema.Table.update` construct
+  scope of the ORM's object handling, such as if a :meth:`.Table.update` construct
   were emitted using the :meth:`.Session.execute` method;
 
 * if the application
@@ -620,7 +620,7 @@ The second bullet has the important caveat that "it is also known that the isola
 allow this data to be visible."  This means that it cannot be assumed that an
 UPDATE that happened on another database connection will yet be visible here
 locally; in many cases, it will not.  This is why if one wishes to use
-:meth:`.Session.expire` or :meth:`.Session.refresh` in order to view data between ongoing
+:meth:`.expire` or :meth:`.refresh` in order to view data between ongoing
 transactions, an understanding of the isolation behavior in effect is essential.
 
 .. seealso::

@@ -238,13 +238,10 @@ def reconnecting_engine(url=None, options=None):
     return engine
 
 
-def testing_engine(url=None, options=None, future=False):
+def testing_engine(url=None, options=None):
     """Produce an engine configured by --options with optional overrides."""
 
-    if future or config.db and config.db._is_future:
-        from sqlalchemy.future import create_engine
-    else:
-        from sqlalchemy import create_engine
+    from sqlalchemy import create_engine
     from sqlalchemy.engine.url import make_url
 
     if not options:

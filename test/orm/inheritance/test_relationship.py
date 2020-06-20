@@ -6,7 +6,6 @@ from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import backref
-from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import contains_eager
 from sqlalchemy.orm import create_session
 from sqlalchemy.orm import joinedload
@@ -152,11 +151,10 @@ class SelfReferentialTestJoinedToBase(fixtures.MappedTest):
         sess.add(e1)
         sess.flush()
         sess.expunge_all()
-        pa = aliased(Person)
         eq_(
             sess.query(Engineer)
-            .join(pa, "reports_to")
-            .filter(pa.name == "dogbert")
+            .join("reports_to", aliased=True)
+            .filter(Person.name == "dogbert")
             .first(),
             Engineer(name="dilbert"),
         )
@@ -263,12 +261,10 @@ class SelfReferentialJ2JTest(fixtures.MappedTest):
         sess.flush()
         sess.expunge_all()
 
-        ma = aliased(Manager)
-
         eq_(
             sess.query(Engineer)
-            .join(ma, "reports_to")
-            .filter(ma.name == "dogbert")
+            .join("reports_to", aliased=True)
+            .filter(Manager.name == "dogbert")
             .first(),
             Engineer(name="dilbert"),
         )
@@ -442,24 +438,22 @@ class SelfReferentialJ2JSelfTest(fixtures.MappedTest):
             [Engineer(name="e1")],
         )
 
-    def test_join_aliased_one(self):
+    def test_join_aliased_flag_one(self):
         sess = self._two_obj_fixture()
-        ea = aliased(Engineer)
         eq_(
             sess.query(Engineer)
-            .join(ea, "reports_to")
-            .filter(ea.name == "wally")
+            .join("reports_to", aliased=True)
+            .filter(Engineer.name == "wally")
             .first(),
             Engineer(name="dilbert"),
         )
 
-    def test_join_aliased_two(self):
+    def test_join_aliased_flag_two(self):
         sess = self._five_obj_fixture()
-        ea = aliased(Engineer)
         eq_(
             sess.query(Engineer)
-            .join(ea, Engineer.engineers)
-            .filter(ea.name == "e4")
+            .join(Engineer.engineers, aliased=True)
+            .filter(Engineer.name == "e4")
             .all(),
             [Engineer(name="e2")],
         )
@@ -469,27 +463,26 @@ class SelfReferentialJ2JSelfTest(fixtures.MappedTest):
         e1 = sess.query(Engineer).filter_by(name="e1").one()
         e2 = sess.query(Engineer).filter_by(name="e2").one()
 
-        ea = aliased(Engineer)
         eq_(
             sess.query(Engineer)
-            .join(ea, Engineer.engineers)
-            .filter(ea.reports_to == None)
+            .join(Engineer.engineers, aliased=True)
+            .filter(Engineer.reports_to == None)
             .all(),  # noqa
             [],
         )
 
         eq_(
             sess.query(Engineer)
-            .join(ea, Engineer.engineers)
-            .filter(ea.reports_to == e1)
+            .join(Engineer.engineers, aliased=True)
+            .filter(Engineer.reports_to == e1)
             .all(),
             [e1],
         )
 
         eq_(
             sess.query(Engineer)
-            .join(ea, Engineer.engineers)
-            .filter(ea.reports_to != None)
+            .join(Engineer.engineers, aliased=True)
+            .filter(Engineer.reports_to != None)
             .all(),  # noqa
             [e1, e2],
         )
@@ -581,7 +574,7 @@ class M2MFilterTest(fixtures.MappedTest):
         )
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Organization = cls.classes.Organization
         e1 = Engineer(name="e1")
         e2 = Engineer(name="e2")
@@ -589,7 +582,7 @@ class M2MFilterTest(fixtures.MappedTest):
         e4 = Engineer(name="e4")
         org1 = Organization(name="org1", engineers=[e1, e2])
         org2 = Organization(name="org2", engineers=[e3, e4])
-        sess = create_session(connection)
+        sess = create_session()
         sess.add(org1)
         sess.add(org2)
         sess.flush()
@@ -766,48 +759,6 @@ class SelfReferentialM2MTest(fixtures.MappedTest, AssertsCompiledSQL):
             "secondary_1.left_id",
         )
 
-    def test_query_crit_core_workaround(self):
-        # do a test in the style of orm/test_core_compilation.py
-
-        Child1, Child2 = self.classes.Child1, self.classes.Child2
-        secondary = self.tables.secondary
-
-        configure_mappers()
-
-        from sqlalchemy.sql import join
-
-        C1 = aliased(Child1, flat=True)
-
-        # figure out all the things we need to do in Core to make
-        # the identical query that the ORM renders.
-
-        salias = secondary.alias()
-        stmt = (
-            select([Child2])
-            .select_from(
-                join(
-                    Child2,
-                    salias,
-                    Child2.id.expressions[1] == salias.c.left_id,
-                ).join(C1, salias.c.right_id == C1.id.expressions[1])
-            )
-            .where(C1.left_child2 == Child2(id=1))
-        )
-
-        self.assert_compile(
-            stmt.apply_labels(),
-            "SELECT parent.id AS parent_id, "
-            "parent.cls AS parent_cls, child2.id AS child2_id "
-            "FROM secondary AS secondary_1, "
-            "parent JOIN child2 ON parent.id = child2.id JOIN secondary AS "
-            "secondary_2 ON parent.id = secondary_2.left_id JOIN "
-            "(parent AS parent_1 JOIN child1 AS child1_1 "
-            "ON parent_1.id = child1_1.id) "
-            "ON parent_1.id = secondary_2.right_id WHERE "
-            "parent_1.id = secondary_1.right_id AND :param_1 = "
-            "secondary_1.left_id",
-        )
-
     def test_eager_join(self):
         Child1, Child2 = self.classes.Child1, self.classes.Child2
         sess = create_session()
@@ -949,13 +900,13 @@ class EagerToSubclassTest(fixtures.MappedTest):
         mapper(Related, related)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         global p1, p2
 
         Parent = cls.classes.Parent
         Sub = cls.classes.Sub
         Related = cls.classes.Related
-        sess = Session(connection)
+        sess = Session()
         r1, r2 = Related(data="r1"), Related(data="r2")
         s1 = Sub(data="s1", related=r1)
         s2 = Sub(data="s2", related=r2)
@@ -1128,11 +1079,11 @@ class SubClassEagerToSubClassTest(fixtures.MappedTest):
         mapper(Sub, sub, inherits=Base, polymorphic_identity="s")
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         global p1, p2
 
         Sub, Subparent = cls.classes.Sub, cls.classes.Subparent
-        sess = create_session(connection)
+        sess = create_session()
         p1 = Subparent(
             data="p1",
             children=[Sub(data="s1"), Sub(data="s2"), Sub(data="s3")],
@@ -1314,12 +1265,12 @@ class SameNamedPropTwoPolymorphicSubClassesTest(fixtures.MappedTest):
         mapper(D, cls.tables.d)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         B = cls.classes.B
         C = cls.classes.C
         D = cls.classes.D
 
-        session = Session(connection)
+        session = Session()
 
         d = D()
         session.add_all([B(related=[d]), C(related=[d])])
@@ -1487,10 +1438,10 @@ class SubClassToSubClassFromParentTest(fixtures.MappedTest):
         mapper(D, cls.tables.d, inherits=A, polymorphic_identity="d")
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         B = cls.classes.B
 
-        session = Session(connection)
+        session = Session()
         session.add(B())
         session.commit()
 
@@ -1833,7 +1784,7 @@ class JoinedloadWPolyOfTypeContinued(
             id = Column(Integer, primary_key=True)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         User, Fred, SubBar, Bar, SubFoo = cls.classes(
             "User", "Fred", "SubBar", "Bar", "SubFoo"
         )
@@ -1843,7 +1794,7 @@ class JoinedloadWPolyOfTypeContinued(
         sub_bar = SubBar(fred=fred)
         rectangle = SubFoo(owner=user, baz=10, bar=bar, sub_bar=sub_bar)
 
-        s = Session(connection)
+        s = Session()
         s.add_all([user, fred, bar, sub_bar, rectangle])
         s.commit()
 
@@ -2545,9 +2496,9 @@ class MultipleAdaptUsesEntityOverTableTest(
 
     def test_two_joins_adaption(self):
         a, c, d = self.tables.a, self.tables.c, self.tables.d
-        q = self._two_join_fixture()._compile_state()
+        q = self._two_join_fixture()
 
-        btoc = q.from_clauses[0].left
+        btoc = q._from_obj[0].left
 
         ac_adapted = btoc.right.element.left
         c_adapted = btoc.right.element.right
@@ -2555,7 +2506,7 @@ class MultipleAdaptUsesEntityOverTableTest(
         is_(ac_adapted.element, a)
         is_(c_adapted.element, c)
 
-        ctod = q.from_clauses[0].right
+        ctod = q._from_obj[0].right
         ad_adapted = ctod.element.left
         d_adapted = ctod.element.right
         is_(ad_adapted.element, a)
@@ -2563,10 +2514,9 @@ class MultipleAdaptUsesEntityOverTableTest(
 
         bname, cname, dname = q._entities
 
-        adapter = q._get_current_adapter()
-        b_name_adapted = adapter(bname.column, False)
-        c_name_adapted = adapter(cname.column, False)
-        d_name_adapted = adapter(dname.column, False)
+        b_name_adapted = q._adapt_clause(bname.column, False, True)
+        c_name_adapted = q._adapt_clause(cname.column, False, True)
+        d_name_adapted = q._adapt_clause(dname.column, False, True)
 
         assert bool(b_name_adapted == a.c.name)
         assert bool(c_name_adapted == ac_adapted.c.name)
@@ -2780,9 +2730,9 @@ class M2ODontLoadSiblingTest(fixtures.DeclarativeMappedTest):
             child2 = relationship(Child2, viewonly=True)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Other, Child1 = cls.classes("Other", "Child1")
-        s = Session(connection)
+        s = Session()
         obj = Other(parent=Child1())
         s.add(obj)
         s.commit()

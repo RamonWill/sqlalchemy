@@ -28,8 +28,6 @@ from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_not_
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
-from sqlalchemy.testing.assertsql import AllOf
-from sqlalchemy.testing.assertsql import assert_engine
 from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
@@ -348,10 +346,13 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
         q = create_session().query(Item).order_by(Item.id)
 
         def go():
-            ka = aliased(Keyword)
             eq_(
                 self.static.item_keyword_result[0:2],
-                (q.join(ka, "keywords").filter(ka.name == "red")).all(),
+                (
+                    q.join("keywords", aliased=True).filter(
+                        Keyword.name == "red"
+                    )
+                ).all(),
             )
 
         self.assert_sql_count(testing.db, go, 2)
@@ -1682,7 +1683,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
         mapper(Paperwork, paperwork)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
 
         e1 = Engineer(primary_language="java")
         e2 = Engineer(primary_language="c++")
@@ -1691,7 +1692,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
             Paperwork(description="tps report #2"),
         ]
         e2.paperwork = [Paperwork(description="tps report #3")]
-        sess = create_session(connection)
+        sess = create_session()
         sess.add_all([e1, e2])
         sess.flush()
 
@@ -1989,7 +1990,7 @@ class HeterogeneousSubtypesTest(fixtures.DeclarativeMappedTest):
             name = Column(String(50))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Company, Programmer, Manager, GolfSwing, Language = cls.classes(
             "Company", "Programmer", "Manager", "GolfSwing", "Language"
         )
@@ -2013,7 +2014,7 @@ class HeterogeneousSubtypesTest(fixtures.DeclarativeMappedTest):
                 ),
             ],
         )
-        sess = Session(connection)
+        sess = Session()
         sess.add_all([c1, c2])
         sess.commit()
 
@@ -2115,10 +2116,10 @@ class TupleTest(fixtures.DeclarativeMappedTest):
             )
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
 
-        session = Session(connection)
+        session = Session()
         session.add_all(
             [
                 A(id1=i, id2=i + 2, bs=[B(id=(i * 6) + j) for j in range(6)])
@@ -2223,10 +2224,10 @@ class ChunkingTest(fixtures.DeclarativeMappedTest):
             a = relationship("A", back_populates="bs")
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
 
-        session = Session(connection)
+        session = Session()
         session.add_all(
             [
                 A(id=i, bs=[B(id=(i * 6) + j) for j in range(1, 6)])
@@ -2457,9 +2458,9 @@ class SubRelationFromJoinedSubclassMultiLevelTest(_Polymorphic):
         mapper(MachineType, machine_type)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         c1 = cls._fixture()
-        sess = create_session(connection)
+        sess = create_session()
         sess.add(c1)
         sess.flush()
 
@@ -2835,10 +2836,10 @@ class SelfRefInheritanceAliasedTest(
             __mapper_args__ = {"polymorphic_identity": "bar"}
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Foo, Bar = cls.classes("Foo", "Bar")
 
-        session = Session(connection)
+        session = Session()
         target = Bar(id=1)
         b1 = Bar(id=2, foo=Foo(id=3, foo=target))
         session.add(b1)
@@ -2847,40 +2848,40 @@ class SelfRefInheritanceAliasedTest(
     def test_twolevel_selectin_w_polymorphic(self):
         Foo, Bar = self.classes("Foo", "Bar")
 
-        for count in range(3):
-            r = with_polymorphic(Foo, "*", aliased=True)
-            attr1 = Foo.foo.of_type(r)
-            attr2 = r.foo
+        r = with_polymorphic(Foo, "*", aliased=True)
+        attr1 = Foo.foo.of_type(r)
+        attr2 = r.foo
 
-            s = Session()
-            q = (
-                s.query(Foo)
-                .filter(Foo.id == 2)
-                .options(selectinload(attr1).selectinload(attr2))
-            )
-            results = self.assert_sql_execution(
-                testing.db,
-                q.all,
-                CompiledSQL(
-                    "SELECT foo.id AS foo_id_1, foo.type AS foo_type, "
-                    "foo.foo_id AS foo_foo_id FROM foo WHERE foo.id = :id_1",
-                    [{"id_1": 2}],
-                ),
-                CompiledSQL(
-                    "SELECT foo_1.id AS foo_1_id, "
-                    "foo_1.type AS foo_1_type, foo_1.foo_id AS foo_1_foo_id "
-                    "FROM foo AS foo_1 "
-                    "WHERE foo_1.id IN ([POSTCOMPILE_primary_keys])",
-                    {"primary_keys": [3]},
-                ),
-                CompiledSQL(
-                    "SELECT foo.id AS foo_id_1, foo.type AS foo_type, "
-                    "foo.foo_id AS foo_foo_id FROM foo "
-                    "WHERE foo.id IN ([POSTCOMPILE_primary_keys])",
-                    {"primary_keys": [1]},
-                ),
-            )
-            eq_(results, [Bar(id=2, foo=Foo(id=3, foo=Bar(id=1)))])
+        s = Session()
+        q = (
+            s.query(Foo)
+            .filter(Foo.id == 2)
+            .options(selectinload(attr1).selectinload(attr2))
+        )
+        results = self.assert_sql_execution(
+            testing.db,
+            q.all,
+            CompiledSQL(
+                "SELECT foo.id AS foo_id_1, foo.type AS foo_type, "
+                "foo.foo_id AS foo_foo_id FROM foo WHERE foo.id = :id_1",
+                [{"id_1": 2}],
+            ),
+            CompiledSQL(
+                "SELECT foo_1.id AS foo_1_id, "
+                "foo_1.type AS foo_1_type, foo_1.foo_id AS foo_1_foo_id "
+                "FROM foo AS foo_1 "
+                "WHERE foo_1.id IN ([POSTCOMPILE_primary_keys])",
+                {"primary_keys": [3]},
+            ),
+            CompiledSQL(
+                "SELECT foo_1.id AS foo_1_id, "
+                "foo_1.type AS foo_1_type, foo_1.foo_id AS foo_1_foo_id "
+                "FROM foo AS foo_1 "
+                "WHERE foo_1.id IN ([POSTCOMPILE_primary_keys])",
+                {"primary_keys": [1]},
+            ),
+        )
+        eq_(results, [Bar(id=2, foo=Foo(id=3, foo=Bar(id=1)))])
 
 
 class TestExistingRowPopulation(fixtures.DeclarativeMappedTest):
@@ -2940,12 +2941,12 @@ class TestExistingRowPopulation(fixtures.DeclarativeMappedTest):
             id = Column(Integer, primary_key=True)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, A2, B, C1o2m, C2o2m, C1m2o, C2m2o = cls.classes(
             "A", "A2", "B", "C1o2m", "C2o2m", "C1m2o", "C2m2o"
         )
 
-        s = Session(connection)
+        s = Session()
 
         b = B(
             c1_o2m=[C1o2m()], c2_o2m=[C2o2m()], c1_m2o=C1m2o(), c2_m2o=C2m2o()
@@ -3022,10 +3023,10 @@ class SingleInhSubclassTest(
             user_id = Column(Integer, ForeignKey("user.id"))
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         EmployerUser, Role = cls.classes("EmployerUser", "Role")
 
-        s = Session(connection)
+        s = Session()
         s.add(EmployerUser(roles=[Role(), Role(), Role()]))
         s.commit()
 
@@ -3073,10 +3074,10 @@ class MissingForeignTest(
             y = Column(Integer)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
 
-        s = Session(connection)
+        s = Session()
         b1, b2 = B(id=1, x=5, y=9), B(id=2, x=10, y=8)
         s.add_all(
             [
@@ -3127,10 +3128,10 @@ class M2OWDegradeTest(
             y = Column(Integer)
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         A, B = cls.classes("A", "B")
 
-        s = Session(connection)
+        s = Session()
         b1, b2 = B(id=1, x=5, y=9), B(id=2, x=10, y=8)
         s.add_all(
             [
@@ -3311,185 +3312,3 @@ class M2OWDegradeTest(
                 A(id=5, b=b1),
             ],
         )
-
-
-class SameNamePolymorphicTest(fixtures.DeclarativeMappedTest):
-    @classmethod
-    def setup_classes(cls):
-        Base = cls.DeclarativeBasic
-
-        class GenericParent(Base):
-            __tablename__ = "generic_parent"
-            id = Column(Integer, primary_key=True)
-            type = Column(String(50), nullable=False)
-
-            __mapper_args__ = {
-                "polymorphic_on": type,
-                "polymorphic_identity": "generic_parent",
-            }
-
-        class ParentA(GenericParent):
-            __tablename__ = "parent_a"
-
-            id = Column(
-                Integer, ForeignKey("generic_parent.id"), primary_key=True
-            )
-            children = relationship("ChildA", back_populates="parent")
-
-            __mapper_args__ = {"polymorphic_identity": "parent_a"}
-
-        class ParentB(GenericParent):
-            __tablename__ = "parent_b"
-
-            id = Column(
-                Integer, ForeignKey("generic_parent.id"), primary_key=True
-            )
-            children = relationship("ChildB", back_populates="parent")
-
-            __mapper_args__ = {"polymorphic_identity": "parent_b"}
-
-        class ChildA(Base):
-            __tablename__ = "child_a"
-            id = Column(Integer, primary_key=True)
-            parent_id = Column(
-                Integer, ForeignKey("parent_a.id"), nullable=False
-            )
-            parent = relationship("ParentA", back_populates="children")
-
-        class ChildB(Base):
-            __tablename__ = "child_b"
-
-            id = Column(Integer, primary_key=True)
-            parent_id = Column(
-                Integer, ForeignKey("parent_b.id"), nullable=False
-            )
-            parent = relationship("ParentB", back_populates="children")
-
-    @classmethod
-    def insert_data(cls, connection):
-        ParentA, ParentB, ChildA, ChildB = cls.classes(
-            "ParentA", "ParentB", "ChildA", "ChildB"
-        )
-        session = Session(connection)
-        parent_a = ParentA(id=1)
-        parent_b = ParentB(id=2)
-        for i in range(10):
-            parent_a.children.append(ChildA())
-            parent_b.children.append(ChildB())
-        session.add_all([parent_a, parent_b])
-
-        session.commit()
-
-    def test_load_both_wpoly(self):
-        GenericParent, ParentA, ParentB, ChildA, ChildB = self.classes(
-            "GenericParent", "ParentA", "ParentB", "ChildA", "ChildB"
-        )
-        session = Session()
-
-        parent_types = with_polymorphic(GenericParent, [ParentA, ParentB])
-
-        with assert_engine(testing.db) as asserter_:
-            session.query(parent_types).options(
-                selectinload(parent_types.ParentA.children),
-                selectinload(parent_types.ParentB.children),
-            ).all()
-
-        asserter_.assert_(
-            CompiledSQL(
-                "SELECT generic_parent.id AS generic_parent_id, "
-                "generic_parent.type AS generic_parent_type, "
-                "parent_a.id AS parent_a_id, parent_b.id AS parent_b_id "
-                "FROM generic_parent LEFT OUTER JOIN parent_a "
-                "ON generic_parent.id = parent_a.id LEFT OUTER JOIN parent_b "
-                "ON generic_parent.id = parent_b.id"
-            ),
-            AllOf(
-                CompiledSQL(
-                    "SELECT child_a.parent_id AS child_a_parent_id, "
-                    "child_a.id AS child_a_id FROM child_a "
-                    "WHERE child_a.parent_id IN ([POSTCOMPILE_primary_keys])",
-                    [{"primary_keys": [1]}],
-                ),
-                CompiledSQL(
-                    "SELECT child_b.parent_id AS child_b_parent_id, "
-                    "child_b.id AS child_b_id FROM child_b "
-                    "WHERE child_b.parent_id IN ([POSTCOMPILE_primary_keys])",
-                    [{"primary_keys": [2]}],
-                ),
-            ),
-        )
-
-
-class TestBakedCancelsCorrectly(fixtures.DeclarativeMappedTest):
-    # test issue #5303
-
-    @classmethod
-    def setup_classes(cls):
-        Base = cls.DeclarativeBasic
-
-        class User(Base):
-            __tablename__ = "users"
-
-            id = Column(Integer, primary_key=True)
-
-        class Foo(Base):
-            __tablename__ = "foos"
-            __mapper_args__ = {"polymorphic_on": "type"}
-
-            id = Column(Integer, primary_key=True)
-            type = Column(String(50), nullable=False)
-
-        class SubFoo(Foo):
-            __tablename__ = "foos_sub"
-            __mapper_args__ = {"polymorphic_identity": "USER"}
-
-            id = Column(Integer, ForeignKey("foos.id"), primary_key=True)
-            user_id = Column(Integer, ForeignKey("users.id"))
-            user = relationship("User")
-
-        class Bar(Base):
-            __tablename__ = "bars"
-
-            id = Column(Integer, primary_key=True)
-            foo_id = Column(Integer, ForeignKey("foos.id"))
-            foo = relationship("Foo", cascade="all", uselist=False)
-
-    @classmethod
-    def insert_data(cls, connection):
-        User, Bar, SubFoo = cls.classes("User", "Bar", "SubFoo")
-
-        session = Session(connection)
-
-        user = User()
-        sub_foo = SubFoo(user=user)
-        sub_sub_bar = Bar(foo=sub_foo)
-        session.add_all([user, sub_foo, sub_sub_bar])
-        session.commit()
-
-    def test_option_accepted_each_time(self):
-        Foo, User, Bar, SubFoo = self.classes("Foo", "User", "Bar", "SubFoo")
-
-        def go():
-            # in this test, the loader options cancel caching because
-            # the with_polymorphic() can't be cached, and this actually
-            # fails because it won't match up to the with_polymorphic
-            # used in the query if the query is in fact cached.  however
-            # the cache spoil did not use full=True which kept the lead
-            # entities around.
-
-            sess = Session()
-            foo_polymorphic = with_polymorphic(Foo, [SubFoo], aliased=True)
-
-            credit_adjustment_load = selectinload(
-                Bar.foo.of_type(foo_polymorphic)
-            )
-            user_load = credit_adjustment_load.joinedload(
-                foo_polymorphic.SubFoo.user
-            )
-            query = sess.query(Bar).options(user_load)
-            ledger_entry = query.first()
-            ledger_entry.foo.user
-
-        self.assert_sql_count(testing.db, go, 2)
-        self.assert_sql_count(testing.db, go, 2)
-        self.assert_sql_count(testing.db, go, 2)

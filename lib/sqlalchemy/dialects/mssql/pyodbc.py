@@ -103,8 +103,7 @@ Microsoft ODBC drivers.  The feature is enabled by setting the flag
 ``.fast_executemany`` on the DBAPI cursor when an executemany call is to be
 used.   The SQLAlchemy pyodbc SQL Server dialect supports setting this flag
 automatically when the ``.fast_executemany`` flag is passed to
-:func:`_sa.create_engine`
-; note that the ODBC driver must be the Microsoft driver
+:func:`.create_engine`; note that the ODBC driver must be the Microsoft driver
 in order to use this flag::
 
     engine = create_engine(
@@ -314,9 +313,6 @@ class MSExecutionContext_pyodbc(MSExecutionContext):
 
 class MSDialect_pyodbc(PyODBCConnector, MSDialect):
 
-    # mssql still has problems with this on Linux
-    supports_sane_rowcount_returning = False
-
     execution_ctx_cls = MSExecutionContext_pyodbc
 
     colspecs = util.update_copy(
@@ -419,8 +415,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
 
     def is_disconnect(self, e, connection, cursor):
         if isinstance(e, self.dbapi.Error):
-            code = e.args[0]
-            if code in (
+            for code in (
                 "08S01",
                 "01002",
                 "08003",
@@ -431,7 +426,8 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
                 "HY010",
                 "10054",
             ):
-                return True
+                if code in str(e):
+                    return True
         return super(MSDialect_pyodbc, self).is_disconnect(
             e, connection, cursor
         )

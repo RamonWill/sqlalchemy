@@ -12,6 +12,7 @@ from sqlalchemy import testing
 from sqlalchemy import true
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Bundle
+from sqlalchemy.orm import class_mapper
 from sqlalchemy.orm import create_session
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import mapper
@@ -23,7 +24,6 @@ from sqlalchemy.orm import with_polymorphic
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
-from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 
@@ -583,13 +583,23 @@ class RelationshipFromSingleTest(
         )
 
     @classmethod
-    def setup_mappers(cls):
+    def setup_classes(cls):
+        class Employee(cls.Comparable):
+            pass
+
+        class Manager(Employee):
+            pass
+
+        class Stuff(cls.Comparable):
+            pass
+
+    def test_subquery_load(self):
         employee, employee_stuff, Employee, Stuff, Manager = (
-            cls.tables.employee,
-            cls.tables.employee_stuff,
-            cls.classes.Employee,
-            cls.classes.Stuff,
-            cls.classes.Manager,
+            self.tables.employee,
+            self.tables.employee_stuff,
+            self.classes.Employee,
+            self.classes.Stuff,
+            self.classes.Manager,
         )
 
         mapper(
@@ -606,62 +616,32 @@ class RelationshipFromSingleTest(
         )
         mapper(Stuff, employee_stuff)
 
-    @classmethod
-    def setup_classes(cls):
-        class Employee(cls.Comparable):
-            pass
-
-        class Manager(Employee):
-            pass
-
-        class Stuff(cls.Comparable):
-            pass
-
-    @classmethod
-    def insert_data(cls, connection):
-        Employee, Stuff, Manager = cls.classes("Employee", "Stuff", "Manager")
-        s = Session(connection)
-
-        s.add_all(
-            [
-                Employee(
-                    name="e1", stuff=[Stuff(name="es1"), Stuff(name="es2")]
-                ),
-                Manager(
-                    name="m1", stuff=[Stuff(name="ms1"), Stuff(name="ms2")]
-                ),
-            ]
-        )
-        s.commit()
-
-    def test_subquery_load(self):
-        Employee, Stuff, Manager = self.classes("Employee", "Stuff", "Manager")
-
         sess = create_session()
+        context = (
+            sess.query(Manager)
+            .options(subqueryload("stuff"))
+            ._compile_context()
+        )
+        subq = context.attributes[
+            (
+                "subquery",
+                (class_mapper(Manager), class_mapper(Manager).attrs.stuff),
+            )
+        ]
 
-        with self.sql_execution_asserter(testing.db) as asserter:
-            sess.query(Manager).options(subqueryload("stuff")).all()
-
-        asserter.assert_(
-            CompiledSQL(
-                "SELECT employee.id AS employee_id, employee.name AS "
-                "employee_name, employee.type AS employee_type "
-                "FROM employee WHERE employee.type IN ([POSTCOMPILE_type_1])",
-                params=[{"type_1": ["manager"]}],
-            ),
-            CompiledSQL(
-                "SELECT employee_stuff.id AS "
-                "employee_stuff_id, employee_stuff.employee"
-                "_id AS employee_stuff_employee_id, "
-                "employee_stuff.name AS "
-                "employee_stuff_name, anon_1.employee_id "
-                "AS anon_1_employee_id FROM (SELECT "
-                "employee.id AS employee_id FROM employee "
-                "WHERE employee.type IN ([POSTCOMPILE_type_1])) AS anon_1 "
-                "JOIN employee_stuff ON anon_1.employee_id "
-                "= employee_stuff.employee_id",
-                params=[{"type_1": ["manager"]}],
-            ),
+        self.assert_compile(
+            subq,
+            "SELECT employee_stuff.id AS "
+            "employee_stuff_id, employee_stuff.employee"
+            "_id AS employee_stuff_employee_id, "
+            "employee_stuff.name AS "
+            "employee_stuff_name, anon_1.employee_id "
+            "AS anon_1_employee_id FROM (SELECT "
+            "employee.id AS employee_id FROM employee "
+            "WHERE employee.type IN ([POSTCOMPILE_type_1])) AS anon_1 "
+            "JOIN employee_stuff ON anon_1.employee_id "
+            "= employee_stuff.employee_id",
+            use_default_dialect=True,
         )
 
 
@@ -1356,11 +1336,11 @@ class ManyToManyToSingleTest(fixtures.MappedTest, AssertsCompiledSQL):
         )
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         Parent = cls.classes.Parent
         SubChild1 = cls.classes.SubChild1
         SubChild2 = cls.classes.SubChild2
-        s = Session(connection)
+        s = Session()
         s.add_all(
             [
                 Parent(

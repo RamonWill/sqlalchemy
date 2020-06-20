@@ -18,21 +18,13 @@ sections, are listed here.
     :members:
     :inherited-members:
 
-.. autoclass:: sqlalchemy.orm.ColumnProperty
+.. autoclass:: sqlalchemy.orm.properties.ColumnProperty
     :members:
 
-    .. attribute:: Comparator.expressions
+.. autoclass:: sqlalchemy.orm.descriptor_props.ComparableProperty
+    :members:
 
-         The full sequence of columns referenced by this
-         attribute, adjusted for any aliasing in progress.
-
-         .. versionadded:: 1.3.17
-
-         .. seealso::
-
-            :ref:`maptojoin` - usage example
-
-.. autoclass:: sqlalchemy.orm.CompositeProperty
+.. autoclass:: sqlalchemy.orm.descriptor_props.CompositeProperty
     :members:
 
 
@@ -70,7 +62,7 @@ sections, are listed here.
 
         The dictionary is generated when first accessed.  Alternatively,
         it can be specified as a constructor argument to the
-        :func:`.column_property`, :func:`_orm.relationship`, or :func:`.composite`
+        :func:`.column_property`, :func:`.relationship`, or :func:`.composite`
         functions.
 
         .. versionchanged:: 1.0.0 :attr:`.InspectionAttr.info` moved
@@ -88,15 +80,15 @@ sections, are listed here.
 
 .. autodata:: sqlalchemy.orm.interfaces.ONETOMANY
 
-.. autoclass:: sqlalchemy.orm.PropComparator
+.. autoclass:: sqlalchemy.orm.interfaces.PropComparator
     :members:
     :inherited-members:
 
-.. autoclass:: sqlalchemy.orm.RelationshipProperty
+.. autoclass:: sqlalchemy.orm.relationships.RelationshipProperty
     :members:
     :inherited-members:
 
-.. autoclass:: sqlalchemy.orm.SynonymProperty
+.. autoclass:: sqlalchemy.orm.descriptor_props.SynonymProperty
     :members:
     :inherited-members:
 

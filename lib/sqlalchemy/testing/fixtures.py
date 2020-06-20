@@ -20,11 +20,10 @@ from .. import event
 from .. import util
 from ..ext.declarative import declarative_base
 from ..ext.declarative import DeclarativeMeta
-from ..schema import sort_tables_and_constraints
 
 
 # whether or not we use unittest changes things dramatically,
-# as far as how pytest collection works.
+# as far as how py.test collection works.
 
 
 class TestBase(object):
@@ -60,14 +59,12 @@ class TestBase(object):
 
     @config.fixture()
     def connection(self):
-        eng = getattr(self, "bind", config.db)
-        conn = eng.connect()
+        conn = config.db.connect()
         trans = conn.begin()
         try:
             yield conn
         finally:
-            if trans.is_active:
-                trans.rollback()
+            trans.rollback()
             conn.close()
 
     # propose a replacement for @testing.provide_metadata.
@@ -85,31 +82,6 @@ class TestBase(object):
     #        yield metadata
     #    finally:
     #       engines.drop_all_tables(metadata, config.db)
-
-
-class FutureEngineMixin(object):
-    @classmethod
-    def setup_class(cls):
-
-        from ..future.engine import Engine
-        from sqlalchemy import testing
-
-        facade = Engine._future_facade(config.db)
-        config._current.push_engine(facade, testing)
-
-        super_ = super(FutureEngineMixin, cls)
-        if hasattr(super_, "setup_class"):
-            super_.setup_class()
-
-    @classmethod
-    def teardown_class(cls):
-        super_ = super(FutureEngineMixin, cls)
-        if hasattr(super_, "teardown_class"):
-            super_.teardown_class()
-
-        from sqlalchemy import testing
-
-        config._current.pop(testing)
 
 
 class TablesTest(TestBase):
@@ -163,8 +135,7 @@ class TablesTest(TestBase):
     def _setup_once_inserts(cls):
         if cls.run_inserts == "once":
             cls._load_fixtures()
-            with cls.bind.begin() as conn:
-                cls.insert_data(conn)
+            cls.insert_data()
 
     @classmethod
     def _setup_once_tables(cls):
@@ -186,8 +157,7 @@ class TablesTest(TestBase):
     def _setup_each_inserts(self):
         if self.run_inserts == "each":
             self._load_fixtures()
-            with self.bind.begin() as conn:
-                self.insert_data(conn)
+            self.insert_data()
 
     def _teardown_each_tables(self):
         if self.run_define_tables == "each":
@@ -200,16 +170,8 @@ class TablesTest(TestBase):
 
         # no need to run deletes if tables are recreated on setup
         if self.run_define_tables != "each" and self.run_deletes == "each":
-            with self.bind.begin() as conn:
-                for table in reversed(
-                    [
-                        t
-                        for (t, fks) in sort_tables_and_constraints(
-                            self.metadata.tables.values()
-                        )
-                        if t is not None
-                    ]
-                ):
+            with self.bind.connect() as conn:
+                for table in reversed(self.metadata.sorted_tables):
                     try:
                         conn.execute(table.delete())
                     except sa.exc.DBAPIError as ex:
@@ -262,7 +224,7 @@ class TablesTest(TestBase):
         return {}
 
     @classmethod
-    def insert_data(cls, connection):
+    def insert_data(cls):
         pass
 
     def sql_count_(self, count, fn):
@@ -282,11 +244,7 @@ class TablesTest(TestBase):
                 table = cls.tables[table]
             headers[table] = data[0]
             rows[table] = data[1:]
-        for table, fks in sort_tables_and_constraints(
-            cls.metadata.tables.values()
-        ):
-            if table is None:
-                continue
+        for table in cls.metadata.sorted_tables:
             if table not in headers:
                 continue
             cls.bind.execute(
@@ -505,16 +463,14 @@ class ComputedReflectionFixtureTest(TablesTest):
             Column("computed_no_flag", Integer, Computed("normal + 42")),
         )
 
-        if testing.requires.schemas.enabled:
-            t2 = Table(
-                "computed_column_table",
-                metadata,
-                Column("id", Integer, primary_key=True),
-                Column("normal", Integer),
-                Column("computed_no_flag", Integer, Computed("normal / 42")),
-                schema=config.test_schema,
-            )
-
+        t2 = Table(
+            "computed_column_table",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("normal", Integer),
+            Column("computed_no_flag", Integer, Computed("normal / 42")),
+            schema=config.test_schema,
+        )
         if testing.requires.computed_columns_virtual.enabled:
             t.append_column(
                 Column(
@@ -523,14 +479,13 @@ class ComputedReflectionFixtureTest(TablesTest):
                     Computed("normal + 2", persisted=False),
                 )
             )
-            if testing.requires.schemas.enabled:
-                t2.append_column(
-                    Column(
-                        "computed_virtual",
-                        Integer,
-                        Computed("normal / 2", persisted=False),
-                    )
+            t2.append_column(
+                Column(
+                    "computed_virtual",
+                    Integer,
+                    Computed("normal / 2", persisted=False),
                 )
+            )
         if testing.requires.computed_columns_stored.enabled:
             t.append_column(
                 Column(
@@ -539,11 +494,10 @@ class ComputedReflectionFixtureTest(TablesTest):
                     Computed("normal - 42", persisted=True),
                 )
             )
-            if testing.requires.schemas.enabled:
-                t2.append_column(
-                    Column(
-                        "computed_stored",
-                        Integer,
-                        Computed("normal * 42", persisted=True),
-                    )
+            t2.append_column(
+                Column(
+                    "computed_stored",
+                    Integer,
+                    Computed("normal * 42", persisted=True),
                 )
+            )
